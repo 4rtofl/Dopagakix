@@ -1,13 +1,14 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { SessionFacts } from "../src/facts.js";
-import { VideoScriptSchema } from "../src/script/schema.js";
+import { checkScript } from "../src/script/check.js";
+import { type Figure, VideoScriptSchema } from "../src/script/schema.js";
 import { SilentSynthesizer } from "../src/tts/silent.js";
-import { encodeWav } from "../src/tts/wav.js";
+import { encodeWav, silence } from "../src/tts/wav.js";
 import { renderVideo } from "../src/video/render.js";
 import { buildHtml, escapeHtml, shortenPath } from "../src/video/template.js";
 import { buildTimeline } from "../src/video/timeline.js";
@@ -128,12 +129,14 @@ describe("template helpers", () => {
 
 describe.runIf(canRender)("renderVideo(結合テスト)", () => {
   let dir: string;
+  beforeAll(async () => {
+    dir = await mkdtemp(path.join(os.tmpdir(), "dopagakix-test-"));
+  });
   afterAll(async () => {
     if (dir) await rm(dir, { recursive: true, force: true });
   });
 
   it("縦長の mp4 を出力し、あふれる内容は縮小して収める", async () => {
-    dir = await mkdtemp(path.join(os.tmpdir(), "dopagakix-test-"));
     const script = VideoScriptSchema.parse(JSON.parse(await readFile(path.join(fixtures, "script.json"), "utf8")));
     script.work.items = Array.from({ length: 5 }, (_, i) => `長い作業項目その${i + 1}。説明が二行に折り返される程度の長さがある`);
 
@@ -159,5 +162,71 @@ describe.runIf(canRender)("renderVideo(結合テスト)", () => {
     expect(video).toMatchObject({ codec_name: "h264", width: 270, height: 480, pix_fmt: "yuv420p" });
     expect(probe.streams.some((s) => s.codec_type === "audio" && s.codec_name === "aac")).toBe(true);
     expect(Number(probe.format.duration)).toBeCloseTo(timeline.duration, 0);
+  });
+
+  /** 上限いっぱいの図。全角の文字で上限の文字数まで埋める */
+  const fullFigures: Figure[] = [
+    {
+      type: "before_after",
+      title: "設定ファイルの読み込み順序と既定値の変化",
+      before: ["環境変数よりも設定ファイルを優先", "設定ファイルが無ければ起動を中止", "既定値はコードの中だけに書いてた"],
+      after: ["設定ファイルよりも環境変数を優先", "設定ファイルが無いと既定値で起動", "既定値を説明書と設定の例にも記載"],
+      narration: ["前は、設定ファイルが無いと起動できなかったのだ。", "今は環境変数を優先し、無くても既定値で動くのだ。"],
+    },
+    {
+      type: "flow",
+      title: "注文を受けてから発送するまでの処理の流れ",
+      steps: [
+        { label: "注文の内容を受け付ける段", note: "画面と外部連携の両方から受け付け" },
+        { label: "在庫の引き当てを確かめる", note: "倉庫ごとの在庫を合算して確かめる", changed: true },
+        { label: "支払いの手続きを済ませる", note: "失敗したら在庫の引き当てを取消す" },
+        { label: "発送の指示を倉庫に伝える", note: "倉庫の仕組みへ発送の指示書を送信" },
+        { label: "注文した人に完了を伝える", note: "メールと画面の通知で知らせている" },
+      ],
+      narration: ["在庫を確かめる段で、倉庫ごとの在庫を合算するようにしたのだ。", "ほかの段は変えていないのだ。"],
+    },
+  ];
+
+  it.each(fullFigures)("$type の図は、上限いっぱいの内容でも縮小なしで収まり、毎回同じ映像になる", async (figure) => {
+    // 上限ちょうどの内容であることを確かめておく(check の警告が出ない)
+    const script = { ...VideoScriptSchema.parse(JSON.parse(await readFile(path.join(fixtures, "script.json"), "utf8"))), figure };
+    expect(checkScript(script, { seconds: 120 }).issues.filter((issue) => issue.at.startsWith("figure"))).toEqual([]);
+
+    const timeline = await buildTimeline(script, new SilentSynthesizer(), { maxSeconds: 120, speed: 1, maxSpeed: 1.3 });
+    const index = timeline.scenes.findIndex((scene) => scene.kind === "figure");
+    expect(index).toBe(2);
+    const audioFile = path.join(dir, `${figure.type}.wav`);
+    await writeFile(audioFile, encodeWav(timeline.audio));
+    const html = buildHtml({ script, facts, scenes: timeline.scenes, author: "agent", timeZone: "UTC" });
+    const stats = await renderVideo(html, {
+      outFile: path.join(dir, `${figure.type}.mp4`),
+      audioFile,
+      duration: timeline.duration,
+      fps: 2,
+      scale: 0.25,
+    });
+    expect(stats.fitScales[index]).toBe(1);
+
+    // 図解シーンだけの動画を 2 回作り、全フレームが同じ映像になることを確かめる。
+    // Chromium の描画は、文字の縁などがビット単位では一致しないことがあるため(図のないシーンでも起きる)、
+    // フレームごとの PSNR の最小値で比べる。要素の有無や位置がずれれば大きく下がる
+    const scene = timeline.scenes[index]!;
+    const length = scene.end - scene.start;
+    const only = [{ ...scene, start: 0, end: length, cues: scene.cues.map((c) => ({ ...c, start: c.start - scene.start, end: c.end - scene.start })) }];
+    const sceneAudio = path.join(dir, `${figure.type}-scene.wav`);
+    await writeFile(sceneAudio, encodeWav(silence(length, 24_000)));
+    const sceneHtml = buildHtml({ script, facts, scenes: only, author: "agent", timeZone: "UTC" });
+    const render = async (name: string) => {
+      const outFile = path.join(dir, name);
+      await renderVideo(sceneHtml, { outFile, audioFile: sceneAudio, duration: length, fps: 8, scale: 0.25 });
+      return outFile;
+    };
+    const [first, second] = [await render(`${figure.type}-scene-1.mp4`), await render(`${figure.type}-scene-2.mp4`)];
+    const { stderr } = spawnSync("ffmpeg", ["-hide_banner", "-i", first, "-i", second, "-lavfi", "[0:v][1:v]psnr", "-f", "null", "-"], {
+      encoding: "utf8",
+    });
+    const min = /PSNR .*min:(\S+)/.exec(stderr)?.[1];
+    console.log(`${figure.type}: フレームごとの PSNR の最小値 ${min} dB`);
+    expect(min === "inf" || Number(min) >= 40, `PSNR の最小値 ${min} dB`).toBe(true);
   });
 });
