@@ -16,10 +16,11 @@ function available(check: () => void): boolean {
   }
 }
 
+/** ffmpeg を実行できるか(音声の仕上げの結合テスト) */
+export const hasFfmpeg = available(() => execFileSync(process.env.FFMPEG_PATH ?? "ffmpeg", ["-version"], { stdio: "ignore" }));
+
 /** 描画の結合テストを実行できるか */
-export const canRender =
-  available(() => resolveChromium()) &&
-  available(() => execFileSync(process.env.FFMPEG_PATH ?? "ffmpeg", ["-version"], { stdio: "ignore" }));
+export const canRender = available(() => resolveChromium()) && hasFfmpeg;
 
 export const voicevoxUrl = process.env.VOICEVOX_URL ?? DEFAULT_VOICEVOX_URL;
 

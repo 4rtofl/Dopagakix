@@ -150,7 +150,7 @@ function decisionsScene(script) {
         .join("");
     return `${sectionHead("ご判断ください", true)}<ol class="rows">${list}</ol>`;
 }
-function closingScene(script, facts, credit, author, timeZone) {
+function closingScene(script, facts, credit, bgmCredit, author, timeZone) {
     const items = script.next_steps.items;
     const next = items.length
         ? `${sectionHead("次のステップ")}<ul class="rows next">${items
@@ -164,6 +164,7 @@ function closingScene(script, facts, credit, author, timeZone) {
             ? `報告: 作業をした AI エージェント${models}による自己報告。数値はセッションログから自動集計`
             : "報告: 手動で作成。数値はセッションログから自動集計",
         credit ? `音声: ${credit}` : undefined,
+        bgmCredit,
         `セッション ${facts.sessionId?.slice(0, 8) ?? "-"} ・ ${formatDateTime(facts.endTime, timeZone) || "-"}`,
     ]
         .filter(Boolean)
@@ -405,14 +406,14 @@ const PAGE_SCRIPT = String.raw `
 `;
 /** 動画 1 本分のページを作る。フォントは /fonts/ 以下から読み込む前提。 */
 export function buildHtml(input) {
-    const { script, facts, scenes, credit, silent, author, timeZone } = input;
+    const { script, facts, scenes, credit, bgmCredit, silent, author, timeZone } = input;
     const bodies = {
         opening: openingScene(script, facts, timeZone),
         request: requestScene(script, facts),
         work: workScene(script, facts),
         verification: verificationScene(script),
         decisions: decisionsScene(script),
-        closing: closingScene(script, facts, credit, author, timeZone),
+        closing: closingScene(script, facts, credit, bgmCredit, author, timeZone),
     };
     const sections = scenes
         .map((scene) => `<section class="scene" data-kind="${scene.kind}"><div class="content">${bodies[scene.kind]}</div></section>`)

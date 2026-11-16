@@ -1,8 +1,9 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
+import { type BgmSetting, type BgmTrack, bgmGain, bgmLayer } from "./audio/bgm.js";
+import { finishAudio } from "./audio/finish.js";
 import type { SessionFacts } from "./facts.js";
 import { redactSecrets } from "./redact.js";
 import { normalizeScript } from "./script/normalize.js";
@@ -16,6 +17,7 @@ import { buildDigest, collectFacts } from "./transcript/digest.js";
 import { type LocatedTranscript, type LocateOptions, locateTranscript } from "./transcript/locate.js";
 import { readTranscript } from "./transcript/parse.js";
 import type { ParsedSession } from "./transcript/types.js";
+import { resolveUserPath } from "./util/path.js";
 import { type RenderStats, renderVideo } from "./video/render.js";
 import { buildHtml } from "./video/template.js";
 import { buildTimeline } from "./video/timeline.js";
@@ -95,6 +97,8 @@ export interface LoadedReport {
   /** script.json(描画したときの記録)から読んだ場合の事実情報 */
   facts?: SessionFacts;
   persona?: { id: string; name: string };
+  /** script.json に記録された BGM の設定 */
+  bgm?: BgmSetting;
 }
 
 function formatError(file: string, error: z.ZodError): Error {
@@ -115,8 +119,8 @@ export async function loadReport(file: string): Promise<LoadedReport> {
   if (json !== null && typeof json === "object" && "version" in json) {
     const parsed = ScriptFileSchema.safeParse(json);
     if (!parsed.success) throw formatError(file, parsed.error);
-    const { script, author, facts, persona } = parsed.data;
-    return { raw: script, script: normalizeScript(script), author, facts, persona };
+    const { script, author, facts, persona, bgm } = parsed.data;
+    return { raw: script, script: normalizeScript(script), author, facts, persona, bgm };
   }
   const parsed = VideoScriptSchema.safeParse(json);
   if (!parsed.success) throw formatError(file, parsed.error);
@@ -191,8 +195,7 @@ export function resolveRenderPaths(options: RenderPathOptions): { outFile: strin
   const workDir = path.dirname(path.resolve(options.report));
   if (!options.videoDir) return { outFile: path.join(workDir, "summary.mp4"), workDir };
 
-  // 設定ファイル(.claude/settings.json の env など)に書いた値はシェルを通らず、~ が展開されない
-  const videoDir = path.resolve(options.videoDir.replace(/^~(?=$|[\\/])/, () => os.homedir()));
+  const videoDir = resolveUserPath(options.videoDir);
   const title = Array.from(options.title.replace(/[\\/:*?"<>|\p{Cc}]/gu, "_"))
     .slice(0, TITLE_CHARS_IN_FILE_NAME)
     .join("")
@@ -206,6 +209,8 @@ export interface RenderInput {
   facts: SessionFacts;
   author: Author;
   persona?: { id: string; name: string };
+  /** BGM(probeBgm で確かめたもの)。なければ BGM なし */
+  bgm?: BgmTrack;
 }
 
 export interface RenderPipelineOptions {
@@ -229,6 +234,8 @@ export interface RenderResult {
   outFile: string;
   /** 描画に使った台本と事実情報の記録 */
   scriptFile: string;
+  /** 仕上げた音声(BGM を混ぜ、音量をそろえたもの) */
+  audioFile: string;
   duration: number;
   speed: number;
   credit: string | undefined;
@@ -237,6 +244,11 @@ export interface RenderResult {
 
 /** 読み上げありで、最大音量がこれを下回ったら無音とみなす(CI の確認と同じ基準) */
 export const SILENT_DBFS = -40;
+
+/** script.json と timeline.json に記録する BGM の設定 */
+function bgmRecord(bgm: BgmTrack): BgmSetting {
+  return { file: bgm.file, ...(bgm.credit ? { credit: bgm.credit } : {}), volume: bgm.volume };
+}
 
 /** 台本から音声と映像を作り、mp4 に書き出す。 */
 export async function renderReport(input: RenderInput, options: RenderPipelineOptions): Promise<RenderResult> {
@@ -247,6 +259,7 @@ export async function renderReport(input: RenderInput, options: RenderPipelineOp
     author: input.author,
     ...(input.persona ? { persona: input.persona } : {}),
     voice: voice ? { enabled: true, ...voice } : { enabled: false },
+    ...(input.bgm ? { bgm: bgmRecord(input.bgm) } : {}),
     facts: input.facts,
     script: input.script,
   };
@@ -268,11 +281,30 @@ export async function renderReport(input: RenderInput, options: RenderPipelineOp
       );
     }
   }
-  const audioFile = path.join(options.workDir, "narration.wav");
-  await writeFile(audioFile, encodeWav(timeline.audio));
+  const narrationFile = path.join(options.workDir, "narration.wav");
+  await writeFile(narrationFile, encodeWav(timeline.audio));
+  // 音声の仕上げ: BGM を混ぜ、動画ごとの音量をそろえる(BGM がなくても同じ処理をかける)
+  const audio = await finishAudio({
+    narrationFile,
+    layers: input.bgm ? [bgmLayer(input.bgm, timeline.duration)] : [],
+    outFile: path.join(options.workDir, "audio.wav"),
+  });
+  const bgm = input.bgm
+    ? { ...bgmRecord(input.bgm), loudness: input.bgm.loudness, gain: Math.round(bgmGain(input.bgm) * 100) / 100 }
+    : null;
+  const loudness = {
+    input: audio.inputLoudness,
+    output: audio.outputLoudness ?? null,
+    truePeak: audio.outputTruePeak ?? null,
+    normalization: audio.normalization,
+  };
   await writeFile(
     path.join(options.workDir, "timeline.json"),
-    `${JSON.stringify({ duration: timeline.duration, speed: timeline.speed, credit: timeline.credit, scenes: timeline.scenes }, null, 2)}\n`,
+    `${JSON.stringify(
+      { duration: timeline.duration, speed: timeline.speed, credit: timeline.credit, bgm, loudness, scenes: timeline.scenes },
+      (_key, value: unknown) => (typeof value === "number" && !Number.isFinite(value) ? null : value),
+      2,
+    )}\n`,
   );
 
   const html = buildHtml({
@@ -280,13 +312,14 @@ export async function renderReport(input: RenderInput, options: RenderPipelineOp
     facts: input.facts,
     scenes: timeline.scenes,
     credit: timeline.credit,
+    bgmCredit: input.bgm?.credit,
     silent: !voice,
     author: input.author,
     timeZone: options.timeZone,
   });
   const stats = await renderVideo(html, {
     outFile: options.outFile,
-    audioFile,
+    audioFile: audio.outFile,
     duration: timeline.duration,
     fps: options.fps,
     scale: options.scale,
@@ -296,6 +329,7 @@ export async function renderReport(input: RenderInput, options: RenderPipelineOp
   return {
     outFile: options.outFile,
     scriptFile,
+    audioFile: audio.outFile,
     duration: timeline.duration,
     speed: timeline.speed,
     credit: timeline.credit,

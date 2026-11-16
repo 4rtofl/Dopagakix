@@ -63,3 +63,44 @@ describe("CLI: 読み上げを必須にする", () => {
     expect((await run(["check", example, "--no-voice"], { DOPAGAKIX_REQUIRE_VOICE: "1" })).code).toBe(1);
   });
 });
+
+describe("CLI: BGM", () => {
+  let dir: string;
+  beforeAll(async () => {
+    dir = await mkdtemp(path.join(os.tmpdir(), "dopagakix-cli-bgm-"));
+  });
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("曲ファイルが無ければ、音声合成と描画を始める前に分かりやすいエラーにする", async () => {
+    const out = path.join(dir, "missing", "summary.mp4");
+    const missing = path.join(dir, "none.mp3");
+    const result = await run(["render", example, "--no-voice", "--bgm", missing, "-o", out]);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain(`エラー: BGM の曲ファイルが見つかりません: ${missing}`);
+    expect(result.stderr).toMatch(/--no-bgm で BGM なしにしてください/);
+    expect(result.stderr).not.toMatch(/字幕の時間割り当て|描画/);
+    expect(existsSync(path.dirname(out))).toBe(false);
+    // 環境変数で指定しても同じ。--no-bgm を付ければ BGM なしで進む(ここでは VOICEVOX がないので読み上げで止まる)
+    expect((await run(["render", example, "-o", out], { DOPAGAKIX_BGM: missing })).stderr).toContain("BGM の曲ファイルが見つかりません");
+    const without = await run(["render", example, "--no-bgm", "-o", out], { DOPAGAKIX_BGM: missing });
+    expect(without.stderr).not.toContain("BGM の曲ファイル");
+    expect(without.stderr).toMatch(/VOICEVOX エンジン.*に接続できません/);
+  });
+
+  it("prepare は、曲ファイルが無ければ環境の不足として知らせる", async () => {
+    const missing = path.join(dir, "none.mp3");
+    const result = await run(["prepare", "--no-voice", "--transcript", transcript, "--out-dir", path.join(dir, "out"), "--bgm", missing]);
+    expect(result.code).toBe(1);
+    expect(result.stdout).toContain(`- BGM: [不足] BGM の曲ファイルが見つかりません: ${missing}`);
+    // 案内する render のコマンドに引き継ぐ
+    expect(result.stdout).toMatch(new RegExp(`3\\. 描画する: dopagakix render .* --bgm ${missing.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  });
+
+  it("--bgm-volume は dB の数値だけを受け付ける", async () => {
+    const bad = await run(["render", example, "--no-voice", "--bgm-volume", "大きめ"]);
+    expect(bad.code).not.toBe(0);
+    expect(bad.stderr).toMatch(/dB の数値を指定してください/);
+  });
+});

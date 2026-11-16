@@ -50,7 +50,7 @@ Claude Code に「動画で報告して」と頼むと、エージェントが�
 |------|------|------|
 | Claude Code | スキルを使って台本を書く | |
 | Node.js 22 以上 | `dopagakix` の実行 | |
-| ffmpeg | mp4 への書き出し | libx264 と aac が使えるもの |
+| ffmpeg | mp4 への書き出し、音声の仕上げ | libx264 と aac が使えるもの |
 | Chromium | 描画 | `npx playwright-core install --only-shell chromium` で導入できます |
 | VOICEVOX ENGINE | 読み上げ音声 | 必須です。字幕のみの動画は、`--no-voice` を明示した場合だけ作れます |
 
@@ -105,7 +105,8 @@ Claude Code で作業を終えたら、「動画で報告して」「動画に�
 | `report.json` | エージェントが書いた台本 |
 | `script.json` | 描画に使った台本と数値、読み上げの有無と話者の記録。`dopagakix render <この script.json>` で同じ内容のまま作り直せます(話者を変える、など) |
 | `narration.wav` | 読み上げ音声 |
-| `timeline.json` | シーンと字幕の時刻 |
+| `audio.wav` | 仕上げた音声(BGM を混ぜ、音量を -16 LUFS にそろえたもの)。動画にはこれを使います |
+| `timeline.json` | シーンと字幕の時刻、BGM の設定、音量の測定値 |
 | `summary.mp4` | 完成した動画(動画の保存先を設定したときは作らず、保存先に置きます) |
 
 完成した動画だけを 1 つのフォルダに集めたいときは、動画の保存先(環境変数 `DOPAGAKIX_VIDEO_DIR`、または `--video-dir`)を設定します。動画は `<保存先>/<日時>-<セッション ID 先頭 8 桁>-<タイトル>.mp4` になり、それ以外のファイルは上のフォルダに残ります。名前の前半が作業ファイルのフォルダと同じなので、対応する `script.json` を探せます。
@@ -127,6 +128,9 @@ Claude Code で作業を終えたら、「動画で報告して」「動画に�
 | `TZ` | 実行環境の設定 | 画面の日時表示のタイムゾーン(例: `Asia/Tokyo`) |
 | `DOPAGAKIX_CREDIT` | 話者から決める | 動画に表示する音声のクレジット表記。通常は指定不要([VOICEVOX とキャラクターの規約](#voicevox-とキャラクターの規約)) |
 | `DOPAGAKIX_VOICEVOX_START` | なし | VOICEVOX に接続できないときに実行する、エンジンの起動コマンド(例: `docker start voicevox`)。応答するまで最大 60 秒待ちます |
+| `DOPAGAKIX_BGM` | なし | BGM の曲ファイル([BGM](#bgm)) |
+| `DOPAGAKIX_BGM_CREDIT` | なし | BGM のクレジット。最終ページにそのまま表示します |
+| `DOPAGAKIX_BGM_VOLUME` | `0` | BGM の音量。基準(-30 LUFS)からの増減(dB) |
 | `DOPAGAKIX_REQUIRE_VOICE` | なし | `1` にすると `--no-voice`(字幕のみ)をエラーにします |
 | `DOPAGAKIX_CHROMIUM` | 自動探索 | 描画に使う Chromium の実行ファイル |
 | `FFMPEG_PATH` | `ffmpeg` | ffmpeg の実行ファイル |
@@ -145,6 +149,37 @@ Claude Code で作業を終えたら、「動画で報告して」「動画に�
 指示者が `env` に `"DOPAGAKIX_REQUIRE_VOICE": "1"` を書いておけば、エージェントは字幕のみの動画を作れなくなります。
 
 すべてのプロジェクトの動画を 1 か所に集めるなら、個人の設定(`~/.claude/settings.json`)の `env` に `"DOPAGAKIX_VIDEO_DIR": "~/Movies/dopagakix"` のように書きます。
+
+### BGM
+
+利用者がダウンロードした曲ファイルを指定すると、読み上げの邪魔にならない音量で BGM を流します。指定しなければ BGM なしです。
+
+```json
+{
+  "env": {
+    "DOPAGAKIX_BGM": "~/Music/dopagakix/bgm.mp3",
+    "DOPAGAKIX_BGM_CREDIT": "音楽：魔王魂"
+  }
+}
+```
+
+- 曲ファイルは ffmpeg が読める形式(mp3 / wav / ogg / m4a など)です。オプションでは `--bgm <file>`・`--bgm-credit <text>`・`--bgm-volume <dB>` で指定し、環境変数より優先します。`--no-bgm` を付けると、環境変数で設定していても BGM を付けません。
+- **曲ファイルはリポジトリの外か、git の管理外に置いてください。** 配布元の規約で再配布が禁止されているため、コミットして公開すると規約違反になりえます。
+- 曲は動画の長さに合わせてループ・カットし、冒頭 1 秒でフェードイン、末尾 2 秒でフェードアウトします。曲全体の音量を -30 LUFS にそろえてから `--bgm-volume` を足し、読み上げ中だけ自動で下げます(ダッキング)。
+- 動画の音声は、BGM の有無にかかわらず、全体を -16 LUFS・トゥルーピーク -1.5 dBTP にそろえます(Apple がポッドキャストに推奨する値に合わせています)。
+- `--bgm-credit` の文字列は、最終ページのクレジットにそのまま表示します。配布元の規約でクレジットが必要な場合は、規約どおりの表記を指定してください。
+- `prepare` の「環境」に、BGM のファイル・長さ・クレジットを表示します。曲ファイルが無い・読めない場合は、`prepare` と `render` がエラーにします(`render` は音声合成と描画の前に止まります)。
+- BGM の設定は `script.json` に記録し、`dopagakix render <script.json>` で描画し直すときも同じ曲・クレジット・音量を使います。オプションや環境変数で別の曲を指定した場合は、そちらを使います(記録のクレジットと音量は引き継ぎません)。
+- dopagakix は曲を同梱せず、自動でダウンロードもしません。エージェント(スキル)も BGM を探したりダウンロードしたりしません。
+
+主なフリー BGM の配布元の規約の要点です(2026 年 10 月 15 日に確認。規約は変わることがあるため、使う前に原文を確認してください)。いずれも、音源ファイルそのものの再配布を禁止しています。
+
+| 配布元 | 商用利用 | クレジット | 再配布・ツールへの同梱 | 出典 |
+|--------|----------|------------|------------------------|------|
+| OpenTracks(旧 DOVA-SYNDROME。2026 年 9 月 15 日に改名) | 可 | 不要(作曲者ごとの条件が優先) | 再配布は禁止。ツールへの組み込みは運営への事前連絡が必要 | [ライセンス](https://opentracks.com/help/articles/license/) |
+| 魔王魂 | 可 | **必要**(例:「音楽：魔王魂」) | 他サイトへの登録や、曲単品の再配布は禁止 | [利用規約](https://maou.audio/rule/) |
+| 甘茶の音楽工房 | 可 | 任意 | 2 次配布・直リンクは禁止 | [利用規約](https://amachamusic.chagasi.com/terms.html) |
+| Pixabay | 可 | 不要 | 加工せずに単体で配布するのは禁止 | [ライセンスの概要](https://pixabay.com/service/license-summary/) |
 
 ### キャラクターの口調
 
@@ -214,6 +249,7 @@ Claude Code で作業を終えたら、「動画で報告して」「動画に�
 | `--speed <x>` | `1.25` | 話速(`render` のみ。ずんだもんの実測で約 7.3 文字/秒) |
 | `--timezone <tz>` | 実行環境の設定 | 画面の日時表示に使います |
 | `--out-dir <dir>` | `dopagakix-out` | 出力先の親ディレクトリ(`prepare` のみ) |
+| `--bgm <file>` / `--bgm-credit <text>` / `--bgm-volume <dB>` | 上の表 | BGM の曲ファイル・クレジット・音量(`prepare` / `render`)。環境変数より優先されます。`--no-bgm` で BGM なし([BGM](#bgm)) |
 | `--video-dir <dir>` | (なし) | 完成した動画だけを置くフォルダ(`prepare` / `render`)。環境変数 `DOPAGAKIX_VIDEO_DIR` でも可 |
 | `-o, --out <file>` | 台本と同じ場所の `summary.mp4` | 動画の出力先(`render` のみ)。作業ファイルも同じ場所に置き、`--video-dir` より優先します |
 
@@ -262,7 +298,7 @@ GitHub Actions(`.github/workflows/ci.yml`)で、push のたびに次の 3 つを
 |--------|------|
 | テスト | Node.js 22・24・26 で型検査と `npm test`。Chromium と ffmpeg を入れ、描画の結合テストを省略させない |
 | git からの導入 | 利用者と同じく git から `npm install -g` で導入し、スキルの導入と同梱サンプルの描画を確かめる |
-| VOICEVOX との結合 | VOICEVOX ENGINE(Docker イメージ `cpu-0.25.2`)を起動し、実エンジンのテストと読み上げ付きの動画の作成を行う。作った動画は成果物として 7 日間保存する |
+| VOICEVOX との結合 | VOICEVOX ENGINE(Docker イメージ `cpu-0.25.2`)を起動し、実エンジンのテストと、読み上げ付きの動画(BGM なし・合成音の BGM 付き)の作成を行う。全体の音量と、読み上げ中に BGM が下がることも確かめる。作った動画は成果物(`voiced-sample`・`voiced-bgm-sample`)として 7 日間保存する |
 
 結合テストは、必要な道具がない環境では省略されます。CI では環境変数 `DOPAGAKIX_TEST_REQUIRE_RENDER` / `DOPAGAKIX_TEST_REQUIRE_VOICEVOX` を `1` にして、準備に失敗したときに省略されたまま成功に見えないようにしています。
 
@@ -278,6 +314,7 @@ src/
 ├── transcript/            セッションログの探索・解析・ダイジェスト化
 ├── script/                台本のスキーマ・整形・確認(check)
 ├── tts/                   VOICEVOX・無音合成・WAV 処理
+├── audio/                 音声の仕上げ(BGM の合成・音量の調整)
 └── video/                 タイムライン・HTML テンプレート・描画
 dist/                      ビルド済みの CLI(npm run compile で更新し、コミットする)
 .claude/skills/video-report/  エージェント用のスキル(npm パッケージにも同梱)
