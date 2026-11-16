@@ -214,6 +214,7 @@ describe("digest と prepare での扱い", () => {
       digestCommand: "dopagakix digest",
       seconds: 60,
       environment: [],
+      readings: { builtin: 0, project: 0 },
       timeZone: "UTC",
     });
     expect(brief).toContain("- 指示 4 回 ・ ツール実行 7 回(コマンド 3 回、うちエラー終了 1 回)");

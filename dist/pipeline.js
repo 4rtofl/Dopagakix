@@ -6,6 +6,7 @@ import { z } from "zod";
 import { isOutputPath } from "./output.js";
 import { redactSecrets } from "./redact.js";
 import { normalizeScript } from "./script/normalize.js";
+import { checkedReadingsFile, compareReadings, loadCheckedReadings, mismatchMessage, reviewReasons, speechUnits, } from "./script/readings.js";
 import { ScriptFileSchema, VideoScriptSchema } from "./script/schema.js";
 import { SilentSynthesizer } from "./tts/silent.js";
 import { withVoicevoxStart } from "./tts/start.js";
@@ -71,8 +72,8 @@ export async function loadReport(file) {
         const parsed = ScriptFileSchema.safeParse(json);
         if (!parsed.success)
             throw formatError(file, parsed.error);
-        const { script, author, facts, persona } = parsed.data;
-        return { raw: script, script: normalizeScript(script), author, facts, persona };
+        const { script, author, facts, persona, readings } = parsed.data;
+        return { raw: script, script: normalizeScript(script), author, facts, persona, readings };
     }
     const parsed = VideoScriptSchema.safeParse(json);
     if (!parsed.success)
@@ -95,7 +96,50 @@ export function assertVoiceAllowed(voice, env = process.env) {
 export async function createSynthesizer(options) {
     if (!options.voice)
         return new SilentSynthesizer();
-    return withVoicevoxStart(() => VoicevoxSynthesizer.create({ baseUrl: options.voicevoxUrl, speaker: options.speaker, credit: options.credit, fetch: options.fetch }), { command: options.startCommand, baseUrl: options.voicevoxUrl, onStart: options.onStart, fetch: options.fetch });
+    return withVoicevoxStart(() => VoicevoxSynthesizer.create({
+        baseUrl: options.voicevoxUrl,
+        speaker: options.speaker,
+        credit: options.credit,
+        readings: options.readings,
+        fetch: options.fetch,
+    }), { command: options.startCommand, baseUrl: options.voicevoxUrl, onStart: options.onStart, fetch: options.fetch });
+}
+/** 台本の全ての読み上げ文を、描画と同じ単位で VOICEVOX に通し、読みを調べる */
+export async function inspectReadings(script, synth) {
+    const inspected = [];
+    for (const unit of speechUnits(script)) {
+        const spoken = await synth.inspect(unit.text);
+        inspected.push({ ...unit, ...spoken, reasons: reviewReasons(spoken.sent, spoken.kana) });
+    }
+    return inspected;
+}
+/** check が確かめた読みを、台本と同じ場所の checked-readings.json に保存する */
+export async function saveCheckedReadings(report, inspected, engine) {
+    const record = {
+        version: 1,
+        checkedAt: new Date().toISOString(),
+        engine,
+        sentences: inspected.map(({ at, text, sent, reading }) => ({ at, text, sent, reading })),
+    };
+    const file = checkedReadingsFile(report);
+    await writeFile(file, `${JSON.stringify(record, null, 2)}\n`);
+    return file;
+}
+/**
+ * 描画の前に、全ての読み上げ文の読みが check で確かめた読みと一致するかを照らし合わせる。
+ * 確認していない文や読みが違う文があればエラーにする。照らし合わせたクエリで音声を作るので、
+ * 動画の読みは check で表示した読みと必ず一致する。
+ */
+export async function verifyReadings(report, script, synth) {
+    const file = checkedReadingsFile(report);
+    const checked = await loadCheckedReadings(file);
+    if (!checked)
+        throw new Error(mismatchMessage([], file, false));
+    const inspected = await inspectReadings(script, synth);
+    const mismatches = compareReadings(inspected, checked);
+    if (mismatches.length > 0)
+        throw new Error(mismatchMessage(mismatches, file, true));
+    return inspected.length;
 }
 /** 出力先を作り、中身を git の管理対象から外す(pytest のキャッシュと同じく、.gitignore に * を書く)。 */
 export async function prepareOutputRoot(dir) {
@@ -138,6 +182,7 @@ export async function renderReport(input, options) {
         author: input.author,
         ...(input.persona ? { persona: input.persona } : {}),
         voice: voice ? { enabled: true, ...voice } : { enabled: false },
+        ...(input.readings ? { readings: input.readings } : {}),
         facts: input.facts,
         script: input.script,
     };
