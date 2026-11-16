@@ -22,10 +22,11 @@ export const VideoScriptSchema = z.object({
     ),
   headline: z.string().describe("結論を一文で(全角40文字以内)"),
   opening: z.object({ narration: Narration }),
-  request: z.object({
-    summary: z.string().describe("指示者が依頼した内容の要約(全角60文字以内)"),
-    narration: Narration,
-  }),
+  /**
+   * 廃止(「ご依頼の内容」のシーンはなくした)。以前の台本や script.json を読めるよう受け付けるが、
+   * 表示も読み上げもしない。check は、書かれていれば知らせる。
+   */
+  request: z.unknown().optional().describe("廃止。書いても動画には表示されない"),
   work: z.object({
     items: z.array(z.string()).describe("実施した主な作業。成果ベースで最大5件、各全角28文字以内"),
     narration: Narration,

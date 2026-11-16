@@ -15,6 +15,7 @@ function cleanLines(lines: string[]): string[] {
 /**
  * 台本を表示用に整える。エージェントが書いた台本にも、手で編集した script.json にも使う。
  * 件数の上限を超えた項目は切り捨て、秘匿情報の取りこぼしをもう一度マスクする。
+ * 廃止した request(ご依頼の内容)は表示しないので落とす。
  */
 export function normalizeScript(script: VideoScript): VideoScript {
   return {
@@ -22,7 +23,6 @@ export function normalizeScript(script: VideoScript): VideoScript {
     status: script.status,
     headline: clean(script.headline),
     opening: { narration: cleanLines(script.opening.narration) },
-    request: { summary: clean(script.request.summary), narration: cleanLines(script.request.narration) },
     work: {
       items: cleanLines(script.work.items).slice(0, LIMITS.work),
       narration: cleanLines(script.work.narration),

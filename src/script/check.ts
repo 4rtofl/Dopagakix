@@ -36,7 +36,14 @@ function hardToRead(text: string): string[] {
 }
 
 /** 画面の文字の長さの目安(全角)。超えた分は縮小して収めるため、大きく超えたときだけ警告する */
-const SCREEN_LIMITS = { title: 20, headline: 40, summary: 60, item: 28, label: 24, decisionTitle: 24, detail: 50 } as const;
+const SCREEN_LIMITS = { title: 20, headline: 40, item: 28, label: 24, decisionTitle: 24, detail: 50 } as const;
+
+/**
+ * 動画の作成依頼への言及。動画の作成は報告の対象ではなく、冒頭は結論から始める
+ * (「動画で報告するのだ」「ご依頼の件について報告します」のような前置きをしない)。
+ */
+const VIDEO_REQUEST = /動画(?:で|に)(?:報告|まとめ)|報告動画/;
+const VIDEO_REQUEST_MESSAGE = "動画の作成依頼に触れています。動画の作成は報告の対象外なので、作業の内容と結論だけを書いてください";
 
 export interface ScriptIssue {
   /** 台本(JSON)の中の位置。例: work.narration[1] */
@@ -65,7 +72,6 @@ export interface CheckOptions {
 function narrations(script: VideoScript): Array<{ at: string; lines: string[] }> {
   return [
     { at: "opening.narration", lines: script.opening.narration },
-    { at: "request.narration", lines: script.request.narration },
     { at: "work.narration", lines: script.work.narration },
     { at: "verification.narration", lines: script.verification.narration },
     { at: "decisions.narration", lines: script.decisions.narration },
@@ -78,7 +84,6 @@ function screenTexts(script: VideoScript): Array<{ at: string; text: string; lim
   return [
     { at: "title", text: script.title, limit: SCREEN_LIMITS.title },
     { at: "headline", text: script.headline, limit: SCREEN_LIMITS.headline },
-    { at: "request.summary", text: script.request.summary, limit: SCREEN_LIMITS.summary },
     ...script.work.items.map((text, i) => ({ at: `work.items[${i}]`, text, limit: SCREEN_LIMITS.item })),
     ...script.verification.items.map((item, i) => ({
       at: `verification.items[${i}].label`,
@@ -125,6 +130,7 @@ export function checkScript(script: VideoScript, options: CheckOptions): ScriptC
       if (hard.length > 0) {
         issues.push({ at: `${at}[${i}]`, message: `読み上げにくい表記(${hard.join("・")})があります。言い換えてください:「${text}」` });
       }
+      if (VIDEO_REQUEST.test(text)) issues.push({ at: `${at}[${i}]`, message: `${VIDEO_REQUEST_MESSAGE}:「${text}」` });
       if (persona && checkEndings([text], persona).misses.length > 0) {
         issues.push({ at: `${at}[${i}]`, message: `${persona.name}の口調の文末になっていません:「${text}」` });
       }
@@ -136,9 +142,17 @@ export function checkScript(script: VideoScript, options: CheckOptions): ScriptC
     if (length > Math.round(limit * 1.25)) {
       issues.push({ at, message: `${length} 文字あります(目安 ${limit} 文字以内)。文字が小さく縮小されます:「${text.trim()}」` });
     }
+    if (VIDEO_REQUEST.test(text)) issues.push({ at, message: `${VIDEO_REQUEST_MESSAGE}:「${text.trim()}」` });
     if (persona?.endingPattern && new RegExp(persona.endingPattern).test(text.trim())) {
       issues.push({ at, message: `画面の文字には口調を付けず、中立に書いてください:「${text.trim()}」` });
     }
+  }
+
+  if (script.request !== undefined) {
+    issues.push({
+      at: "request",
+      message: "「ご依頼の内容」のシーンはなくなったため、request は表示も読み上げもされません。削除してください。",
+    });
   }
 
   const counts: Array<[string, number, number]> = [

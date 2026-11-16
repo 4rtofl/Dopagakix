@@ -4,6 +4,7 @@ import type { FileChange, SessionFacts } from "../facts.js";
 import { formatClock, formatDateTime, zoneLabel } from "../util/time.js";
 import { isRecord, str } from "./parse.js";
 import type { ParsedSession, SessionEvent } from "./types.js";
+import { findVideoSpans, type VideoSpanOptions, type VideoSpans } from "./video.js";
 
 type ToolCall = Extract<SessionEvent, { kind: "tool_call" }>;
 type ToolResult = Extract<SessionEvent, { kind: "tool_result" }>;
@@ -31,18 +32,29 @@ export const DEFAULT_MAX_DIGEST_CHARS = 30_000;
 /** これより長く何も起きていない間隔は、放置していた時間とみなす */
 const IDLE_GAP_MS = 15 * 60_000;
 
-function activeMinutes(session: ParsedSession): number | undefined {
-  const times = session.events
-    .map((e) => (e.time ? Date.parse(e.time) : Number.NaN))
-    .filter((t) => Number.isFinite(t))
-    .sort((a, b) => a - b);
-  if (times.length === 0) return undefined;
+/**
+ * 作業時間の推定。15 分を超える間隔(放置)を除いて合計する。
+ * 除いたイベント(動画の作成)の前後は、間隔が短くても足さない。
+ */
+function activeMinutes(events: SessionEvent[], excluded: Set<number>): number | undefined {
   let active = 0;
-  for (let i = 1; i < times.length; i++) {
-    const gap = times[i]! - times[i - 1]!;
-    if (gap <= IDLE_GAP_MS) active += gap;
-  }
-  return Math.round(active / 60_000);
+  let any = false;
+  let previous: number | undefined;
+  events.forEach((event, i) => {
+    if (excluded.has(i)) {
+      previous = undefined;
+      return;
+    }
+    const time = event.time ? Date.parse(event.time) : Number.NaN;
+    if (!Number.isFinite(time)) return;
+    any = true;
+    if (previous !== undefined) {
+      const gap = time - previous;
+      if (gap >= 0 && gap <= IDLE_GAP_MS) active += gap;
+    }
+    previous = previous === undefined ? time : Math.max(previous, time);
+  });
+  return any ? Math.round(active / 60_000) : undefined;
 }
 
 export function clip(text: string, max: number): string {
@@ -124,33 +136,55 @@ function recordFileChange(files: Map<string, FileChange>, call: ToolCall, detail
   files.set(file, { path: file, added, removed, edits: 1, created });
 }
 
-/** ログから数値や変更ファイルを機械的に集計する。 */
-export function collectFacts(session: ParsedSession): SessionFacts {
+/**
+ * ログから数値や変更ファイルを機械的に集計する。動画レポートを作っていた区間(findVideoSpans)は、
+ * 指示・ツール実行・コマンドの回数、期間、作業時間に含めない。
+ */
+export function collectFacts(session: ParsedSession, options: VideoSpanOptions = {}): SessionFacts {
   const toolCounts: Record<string, number> = {};
   const calls = new Map<string, ToolCall>();
+  /** 区間の中の呼び出し。変更ファイルの集計にだけ使う(台本などは出力先として別に除く) */
+  const videoCalls = new Map<string, ToolCall>();
   const files = new Map<string, FileChange>();
+  const { spans, excluded } = findVideoSpans(session, options);
   let userPrompts = 0;
   let toolCalls = 0;
   let commandsRun = 0;
   let commandsFailed = 0;
+  let firstTime: number | undefined;
+  let lastTime: number | undefined;
 
-  for (const event of session.events) {
+  session.events.forEach((event, i) => {
+    if (!excluded.has(i)) {
+      const time = event.time ? Date.parse(event.time) : Number.NaN;
+      if (Number.isFinite(time)) {
+        firstTime = Math.min(firstTime ?? time, time);
+        lastTime = Math.max(lastTime ?? time, time);
+      }
+    }
     if (event.kind === "user_prompt") {
-      userPrompts++;
+      if (!excluded.has(i)) userPrompts++;
     } else if (event.kind === "tool_call") {
+      if (excluded.has(i)) {
+        videoCalls.set(event.id, event);
+        return;
+      }
       toolCalls++;
       toolCounts[event.name] = (toolCounts[event.name] ?? 0) + 1;
       calls.set(event.id, event);
       if (COMMAND_TOOLS.has(event.name)) commandsRun++;
     } else if (event.kind === "tool_result") {
-      const call = calls.get(event.toolUseId);
-      if (!call) continue;
-      if (COMMAND_TOOLS.has(call.name) && event.isError) commandsFailed++;
+      const call = calls.get(event.toolUseId) ?? videoCalls.get(event.toolUseId);
+      if (!call) return;
+      if (COMMAND_TOOLS.has(call.name) && event.isError && calls.has(event.toolUseId)) commandsFailed++;
       if (EDIT_TOOLS.has(call.name) && !event.isError) recordFileChange(files, call, event.detail, session.cwd);
     }
-  }
+  });
 
-  const { startTime, endTime } = session;
+  // 動画の作成を除いた場合は、残ったイベントの時刻から期間を決める
+  const iso = (ms: number | undefined) => (ms === undefined ? undefined : new Date(ms).toISOString());
+  const startTime = spans.length > 0 && firstTime !== undefined ? iso(firstTime) : session.startTime;
+  const endTime = spans.length > 0 && lastTime !== undefined ? iso(lastTime) : session.endTime;
   const elapsedMinutes =
     startTime && endTime ? Math.max(0, Math.round((Date.parse(endTime) - Date.parse(startTime)) / 60_000)) : undefined;
   const firstPrompt = session.events.find((e) => e.kind === "user_prompt");
@@ -164,7 +198,7 @@ export function collectFacts(session: ParsedSession): SessionFacts {
     startTime,
     endTime,
     elapsedMinutes,
-    activeMinutes: activeMinutes(session),
+    activeMinutes: activeMinutes(session.events, excluded),
     userPrompts,
     toolCalls,
     toolCounts,
@@ -172,6 +206,15 @@ export function collectFacts(session: ParsedSession): SessionFacts {
     commandsFailed,
     files: [...files.values()].sort((a, b) => b.added + b.removed - (a.added + a.removed) || a.path.localeCompare(b.path)),
     models: session.models,
+    ...(spans.length > 0
+      ? {
+          videoReport: {
+            spans: spans.length,
+            userPrompts: spans.reduce((n, span) => n + span.userPrompts, 0),
+            toolCalls: spans.reduce((n, span) => n + span.toolCalls, 0),
+          },
+        }
+      : {}),
   };
 }
 
@@ -247,19 +290,31 @@ function describeResult(name: string, result: ToolResult, limits: Limits): strin
   return `[RESULT${result.isError ? "・エラー" : ""}]\n${indent(body)}`;
 }
 
-function renderLines(session: ParsedSession, limits: Limits, timeZone?: string): Line[] {
+function renderLines(session: ParsedSession, spans: VideoSpans, limits: Limits, timeZone?: string): Line[] {
   const calls = new Map<string, ToolCall>();
   // 並列実行されたツールの結果を取り違えないよう、呼び出しに通し番号を振る
   const callNumbers = new Map<string, number>();
+  const spanStarts = new Map(spans.spans.map((span) => [span.start, span]));
   let finalIndex = -1;
   session.events.forEach((event, index) => {
-    if (event.kind === "assistant_text") finalIndex = index;
+    if (event.kind === "assistant_text" && !spans.excluded.has(index)) finalIndex = index;
   });
 
   const lines: Line[] = [];
   session.events.forEach((event, index) => {
     const clock = formatClock(event.time, timeZone);
     const ts = clock ? `${clock} ` : "";
+    if (spans.excluded.has(index)) {
+      // 動画の作成は報告の対象外。指示者の発言としても並べず、1 行にまとめる
+      const span = spanStarts.get(index);
+      if (span) {
+        const counts = [span.userPrompts > 0 ? `指示 ${span.userPrompts} 回` : undefined, `ツール実行 ${span.toolCalls} 回`]
+          .filter(Boolean)
+          .join("・");
+        lines.push({ text: `${ts}(動画レポートの作成。報告の対象外。${counts}を省略)`, keep: true });
+      }
+      return;
+    }
     switch (event.kind) {
       case "user_prompt":
         lines.push({ text: `${ts}[USER] ${clip(event.text, limits.prompt)}`, keep: true });
@@ -325,10 +380,15 @@ function renderHeader(facts: SessionFacts, timeZone?: string): string {
     `- 期間: ${period}`,
     `- 指示者の発言: ${facts.userPrompts} 回 / ツール呼び出し: ${facts.toolCalls} 回${topTools ? `(${topTools})` : ""}`,
     `- コマンド実行: ${facts.commandsRun} 回(エラー終了 ${facts.commandsFailed} 回)`,
+    facts.videoReport
+      ? `- 集計から除いたもの: 動画レポートの作成 ${facts.videoReport.spans} 回(指示 ${facts.videoReport.userPrompts} 回・ツール実行 ${facts.videoReport.toolCalls} 回)`
+      : undefined,
     `- 変更したファイル: ${facts.files.length} 件`,
     ...shownFiles,
     `- エージェントのモデル: ${facts.models.join(", ") || "不明"}`,
-  ].join("\n");
+  ]
+    .filter((line) => line !== undefined)
+    .join("\n");
 }
 
 function compose(header: string, body: string[]): string {
@@ -343,7 +403,7 @@ function compose(header: string, body: string[]): string {
   ].join("\n");
 }
 
-export interface DigestOptions {
+export interface DigestOptions extends VideoSpanOptions {
   maxChars?: number;
   timeZone?: string;
 }
@@ -358,14 +418,16 @@ export interface Digest {
 /**
  * セッションのダイジェスト(振り返り用の時系列の要約)を作る。文字数予算を超える場合は、ツール出力から順に削り、
  * 最後は古い側の重要度の低い行を間引く(指示者の発言・回答・最終発言は残す)。
+ * 動画レポートを作っていた区間は、報告の対象外として 1 行にまとめる。
  */
 export function buildDigest(session: ParsedSession, facts: SessionFacts, options: DigestOptions = {}): Digest {
   const maxChars = options.maxChars ?? DEFAULT_MAX_DIGEST_CHARS;
   const header = renderHeader(facts, options.timeZone);
+  const spans = findVideoSpans(session, options);
 
   let lines: Line[] = [];
   for (const [level, limits] of LEVELS.entries()) {
-    lines = renderLines(session, limits, options.timeZone);
+    lines = renderLines(session, spans, limits, options.timeZone);
     const text = compose(
       header,
       lines.map((l) => l.text),

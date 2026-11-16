@@ -84,6 +84,28 @@ describe("buildHtml", () => {
     expect(titleOf("ログイン画面のバリデーションとエラー表示の修正")).toBe("title long");
   });
 
+  it("シーンは結論・実施した作業・検証の結果・判断・次のステップの順で、ご依頼の内容は出さない", async () => {
+    // 以前の台本(request あり)も読み込めるが、表示はしない
+    const script = VideoScriptSchema.parse({
+      ...JSON.parse(await readFile(path.join(fixtures, "script.json"), "utf8")),
+      request: { summary: "入力チェックを修正する依頼", narration: ["ご依頼は入力チェックの修正でした。"] },
+    });
+    const timeline = await buildTimeline(script, new SilentSynthesizer(), { maxSeconds: 120, speed: 1, maxSpeed: 1.3 });
+    const html = buildHtml({ script, facts, scenes: timeline.scenes, author: "agent" });
+    expect([...html.matchAll(/<section class="scene" data-kind="(\w+)">/g)].map((m) => m[1])).toEqual([
+      "opening",
+      "work",
+      "verification",
+      "decisions",
+      "closing",
+    ]);
+    expect(html).not.toContain("ご依頼の内容");
+    expect(html).not.toContain("入力チェックを修正する依頼");
+    expect(html).not.toContain("ご依頼は入力チェックの修正でした");
+    // 指示とツール実行の回数は画面に出さない
+    expect(html).not.toMatch(/指示 \d+ 回/);
+  });
+
   it("台本中の HTML やスクリプト終了タグを無害化する", async () => {
     const script = VideoScriptSchema.parse(JSON.parse(await readFile(path.join(fixtures, "script.json"), "utf8")));
     script.title = "<img src=x onerror=alert(1)>";
@@ -126,8 +148,9 @@ describe.runIf(canRender)("renderVideo(結合テスト)", () => {
     expect(stats.width).toBe(270);
     expect(stats.height).toBe(480);
     expect(stats.captured).toBeLessThan(stats.frames);
-    // 作業シーン(5 項目 + 8 ファイル)は収まらないので縮小される
-    expect(stats.fitScales[2]).toBeLessThan(1);
+    // 結論の次が作業シーン。5 項目 + 8 ファイルは収まらないので縮小される
+    expect(stats.fitScales).toHaveLength(5);
+    expect(stats.fitScales[1]).toBeLessThan(1);
 
     const probe = JSON.parse(
       execFileSync("ffprobe", ["-v", "error", "-show_streams", "-show_format", "-of", "json", outFile], { encoding: "utf8" }),
