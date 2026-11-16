@@ -55,6 +55,25 @@ describe("loadReport", () => {
     expect(report.facts?.files).toHaveLength(2);
   });
 
+  it("廃止した request(ご依頼の内容)を含む以前の台本と script.json も読み込み、表示用からは落とす", async () => {
+    const request = { summary: "ログイン画面の入力チェックを修正する", narration: ["ご依頼は入力チェックの修正でした。"] };
+    const script = { ...JSON.parse(await readFile(path.join(fixtures, "script.json"), "utf8")), request };
+    const reportFile = path.join(dir, "old-report.json");
+    await writeFile(reportFile, JSON.stringify(script));
+    const report = await loadReport(reportFile);
+    expect(report.raw.request).toEqual(request);
+    expect(report.script).not.toHaveProperty("request");
+
+    const record = JSON.parse(await readFile(example, "utf8"));
+    record.script.request = request;
+    const recordFile = path.join(dir, "old-script.json");
+    await writeFile(recordFile, JSON.stringify(record));
+    const again = await loadReport(recordFile);
+    expect(again.raw.request).toEqual(request);
+    expect(again.script).not.toHaveProperty("request");
+    expect(again.facts).toEqual(record.facts);
+  });
+
   it("JSON の誤りと形式の誤りを、場所が分かるように伝える", async () => {
     const broken = path.join(dir, "broken.json");
     await writeFile(broken, "{ title: ");
@@ -208,7 +227,12 @@ describe("resolveRenderPaths", () => {
 
 describe.runIf(canRender)("renderReport(結合テスト)", () => {
   it("動画と、描画し直すための script.json を書き出す", async () => {
-    const report = await loadReport(example);
+    // 廃止した request を含む以前の script.json でも描画できる(表示はしない)
+    const old = JSON.parse(await readFile(example, "utf8"));
+    old.script.request = { summary: "ログイン画面の入力チェックを修正する", narration: ["ご依頼は入力チェックの修正でした。"] };
+    const oldFile = path.join(dir, "old-example.json");
+    await writeFile(oldFile, JSON.stringify(old));
+    const report = await loadReport(oldFile);
     const workDir = path.join(dir, "render");
     await prepareOutputRoot(workDir);
     const result = await renderReport(
@@ -227,6 +251,9 @@ describe.runIf(canRender)("renderReport(結合テスト)", () => {
     );
     expect(existsSync(result.outFile)).toBe(true);
     expect(existsSync(path.join(workDir, "narration.wav"))).toBe(true);
+    expect(result.stats.fitScales).toHaveLength(5);
+    const timeline = JSON.parse(await readFile(path.join(workDir, "timeline.json"), "utf8")) as { scenes: Array<{ kind: string }> };
+    expect(timeline.scenes.map((scene) => scene.kind)).toEqual(["opening", "work", "verification", "decisions", "closing"]);
     const record = ScriptFileSchema.parse(JSON.parse(await readFile(result.scriptFile, "utf8")));
     expect(record).toMatchObject({ author: "agent", persona: { id: "zundamon" }, voice: { enabled: false }, facts: report.facts });
 

@@ -104,6 +104,9 @@ export function buildBrief(input) {
         `- 対象: セッション全体(${facts.sessionId?.slice(0, 8) ?? "ID 不明"}${facts.title ? `「${facts.title}」` : ""})`,
         `- 期間: ${start ? `${start} – ${end}` : "不明"}(作業時間 ${formatMinutes(facts.activeMinutes)}、開始からの経過 ${formatMinutes(facts.elapsedMinutes)})`,
         `- 指示 ${number(facts.userPrompts)} 回 ・ ツール実行 ${number(facts.toolCalls)} 回(コマンド ${number(facts.commandsRun)} 回、うちエラー終了 ${number(facts.commandsFailed)} 回)`,
+        facts.videoReport
+            ? `- 動画の作成(指示 ${number(facts.videoReport.userPrompts)} 回・ツール実行 ${number(facts.videoReport.toolCalls)} 回)は除外`
+            : undefined,
         `- 変更ファイル ${number(facts.files.length)} 件(+${number(added)} −${number(removed)})`,
         ...topFiles.map((f) => `  - ${f.path}(+${number(f.added)} −${number(f.removed)}${f.created ? "、新規" : ""})`),
         facts.files.length > topFiles.length ? `  - ほか ${facts.files.length - topFiles.length} 件` : undefined,

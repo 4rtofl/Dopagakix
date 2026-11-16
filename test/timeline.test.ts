@@ -34,13 +34,12 @@ describe("splitCaption", () => {
 });
 
 describe("buildTimeline", () => {
-  it("6 シーンを順に並べ、字幕と音声の時刻をそろえる", async () => {
+  it("5 シーンを順に並べ、字幕と音声の時刻をそろえる", async () => {
     const synth = fakeSynth();
     const timeline = await buildTimeline(await loadScript(), synth, { maxSeconds: 600, speed: 1, maxSpeed: 1.4 });
 
     expect(timeline.scenes.map((s) => s.kind)).toEqual([
       "opening",
-      "request",
       "work",
       "verification",
       "decisions",

@@ -5,6 +5,7 @@ import { z } from "zod";
 import { type BgmSetting, type BgmTrack, bgmGain, bgmLayer } from "./audio/bgm.js";
 import { finishAudio } from "./audio/finish.js";
 import type { SessionFacts } from "./facts.js";
+import { isOutputPath } from "./output.js";
 import { redactSecrets } from "./redact.js";
 import { normalizeScript } from "./script/normalize.js";
 import {
@@ -33,8 +34,7 @@ import { type RenderStats, renderVideo } from "./video/render.js";
 import { buildHtml } from "./video/template.js";
 import { buildTimeline } from "./video/timeline.js";
 
-/** 動画と作業ファイルの出力先(既定) */
-export const DEFAULT_OUT_DIR = "dopagakix-out";
+export { DEFAULT_OUT_DIR } from "./output.js";
 
 /**
  * 報告のために書いたファイル(台本など)を、作業の成果として数えないよう集計から除く。
@@ -42,15 +42,7 @@ export const DEFAULT_OUT_DIR = "dopagakix-out";
  */
 export function excludeOutputs(facts: SessionFacts, dirs: string[] = []): SessionFacts {
   const base = facts.cwd ?? process.cwd();
-  const roots = dirs.map((dir) => path.resolve(dir));
-  const isOutput = (file: string) => {
-    const absolute = path.resolve(base, file);
-    return (
-      absolute.split(path.sep).includes(DEFAULT_OUT_DIR) ||
-      roots.some((root) => absolute === root || absolute.startsWith(`${root}${path.sep}`))
-    );
-  };
-  const files = facts.files.filter((file) => !isOutput(file.path));
+  const files = facts.files.filter((file) => !isOutputPath(file.path, base, dirs));
   return files.length === facts.files.length ? facts : { ...facts, files };
 }
 
@@ -62,14 +54,15 @@ export interface LoadedSession extends LocatedTranscript {
 }
 
 /**
- * セッションログを探して読み、画面に出す数値を集計する。
- * outputDirs には、報告の台本などを置くディレクトリを渡す(集計から除く)。
+ * セッションログを探して読み、画面に出す数値を集計する。動画レポートを作っていた区間は集計から除く。
+ * outputDirs には、報告の台本などを置くディレクトリを渡す(変更ファイルの集計から除き、
+ * そこのファイルの編集を動画の作成とみなす)。
  */
 export async function loadSession(options: LocateOptions, outputDirs: string[] = []): Promise<LoadedSession> {
   const located = await locateTranscript(options);
   const session = await readTranscript(located.file);
   const sessionId = session.sessionId ?? path.basename(located.file, ".jsonl");
-  return { ...located, session, facts: excludeOutputs(collectFacts(session), outputDirs), sessionId };
+  return { ...located, session, facts: excludeOutputs(collectFacts(session, { outputDirs }), outputDirs), sessionId };
 }
 
 export interface DigestResult {

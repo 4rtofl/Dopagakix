@@ -96,12 +96,6 @@ function openingScene(script, facts, timeZone) {
     </div>
     ${period ? `<div ${enter("when", 6)}>${escapeHtml(period)}</div>` : ""}`;
 }
-function requestScene(script, facts) {
-    return `
-    ${sectionHead("ご依頼の内容")}
-    <blockquote ${enter("quote", 1)}>「${escapeHtml(script.request.summary)}」</blockquote>
-    <div ${enter("note", 2)}>指示 ${number(facts.userPrompts)} 回 ・ ツール実行 ${number(facts.toolCalls)} 回</div>`;
-}
 function fileList(files, limit) {
     if (files.length === 0)
         return "";
@@ -262,13 +256,6 @@ main { position: absolute; top: 230px; left: 80px; right: 80px; height: 1180px; 
 .section.attention .rule { border-top-color: var(--attention); border-top-width: 4px; }
 .section.attention .section-title { color: var(--attention); }
 
-/* 依頼 */
-.quote {
-  font-family: var(--serif); font-weight: 700; font-size: calc(60 * var(--u)); line-height: 1.6;
-  text-indent: -0.5em; padding-left: 0.5em; text-wrap: pretty; font-feature-settings: "palt";
-}
-.note { font-size: calc(28 * var(--u)); color: var(--ink-3); }
-
 /* 罫線で区切った行 */
 .rows { list-style: none; display: flex; flex-direction: column; }
 .row {
@@ -409,7 +396,6 @@ export function buildHtml(input) {
     const { script, facts, scenes, credit, bgmCredit, silent, author, timeZone } = input;
     const bodies = {
         opening: openingScene(script, facts, timeZone),
-        request: requestScene(script, facts),
         work: workScene(script, facts),
         verification: verificationScene(script),
         decisions: decisionsScene(script),
