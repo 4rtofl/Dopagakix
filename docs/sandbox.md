@@ -101,6 +101,8 @@ dopagakix render /tmp/dopagakix/conversation.json --speaker 3 \
 
 `--speaker` は、手順 2 と同じ値にします。`--timezone` は、画面に出す日時のタイムゾーンです。
 
+動画が 10MB(Discord に添付できる大きさ)を超えたら、`render` はエラー(終了コード 1)にし、標準エラーに大きさを出します。動画は出力先に置かず、作業フォルダーの `oversize.mp4` に移します。
+
 ## エージェントへの指示の例
 
 ```text
@@ -119,5 +121,6 @@ Discord の会話を要約した縦型動画を作ってください。台本は
 4. 誤読がなくなったら、次を実行します。
    . /tmp/dopagakix/env.sh && dopagakix render /tmp/dopagakix/conversation.json --speaker 3 \
      -o /mnt/session/outputs/summary.mp4 --work-dir /tmp/dopagakix --timezone Asia/Tokyo
-5. /mnt/session/outputs には summary.mp4 だけを置きます。ほかのファイルを書きません。
+5. render の終了コードが 0 でなければ、標準エラーの内容を報告して終わります(動画が 10MB を超えた場合も含む)。
+6. /mnt/session/outputs には summary.mp4 だけを置きます。ほかのファイルを書きません。
 ```

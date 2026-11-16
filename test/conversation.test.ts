@@ -1,4 +1,5 @@
-import { readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -7,7 +8,7 @@ import { parseConversationFile, parseConversationScript } from "../src/conversat
 import { conversationNarrations, normalizeConversationScript } from "../src/conversation/normalize.js";
 import { type ConversationFile, type ConversationScript, ConversationFileSchema } from "../src/conversation/schema.js";
 import { ZUNDAMON } from "../src/personas.js";
-import { loadConversation, resolveRenderPaths } from "../src/pipeline.js";
+import { assertVideoSize, loadConversation, MAX_CONVERSATION_VIDEO_BYTES, resolveRenderPaths } from "../src/pipeline.js";
 import { conversationSceneLines, conversationSpeechUnits } from "../src/script/readings.js";
 import { SilentSynthesizer } from "../src/tts/silent.js";
 import { buildConversationHtml, formatSpan } from "../src/video/conversation.js";
@@ -254,5 +255,32 @@ describe("会話の要約のファイル", () => {
       workDir: "/tmp/work",
     });
     expect(resolveRenderPaths({ report: "/w/in.json", title: "t", out: "/out/summary.mp4" }).workDir).toBe("/out");
+  });
+});
+
+describe("会話の要約の動画の大きさ", () => {
+  it("上限は 10MB(Discord に添付できる大きさ)", () => {
+    expect(MAX_CONVERSATION_VIDEO_BYTES).toBe(10 * 1024 * 1024);
+  });
+
+  it("上限を超えたら、出力先から作業フォルダーの oversize.mp4 に移してエラーにする", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "dopagakix-size-"));
+    try {
+      const outputs = path.join(dir, "outputs");
+      const work = path.join(dir, "work");
+      await Promise.all([mkdir(outputs), mkdir(work)]);
+      const out = path.join(outputs, "summary.mp4");
+
+      await writeFile(out, Buffer.alloc(100));
+      await expect(assertVideoSize(out, work, 100)).resolves.toBe(100);
+      expect(await readdir(outputs)).toEqual(["summary.mp4"]);
+
+      await writeFile(out, Buffer.alloc(101));
+      await expect(assertVideoSize(out, work, 100)).rejects.toThrow(/動画の大きさが 0\.0MB あり、上限の 0\.0MB を超えています。動画は出力先に置かず、.*oversize\.mp4 に移しました/);
+      expect(await readdir(outputs)).toEqual([]);
+      expect(await readdir(work)).toEqual(["oversize.mp4"]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

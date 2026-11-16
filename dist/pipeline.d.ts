@@ -194,6 +194,15 @@ export interface LoadedConversation {
 export declare function isConversationInput(file: string): Promise<boolean>;
 /** 会話の要約のファイル(台本と数値。render が残した script.json も同じ形式)を読む */
 export declare function loadConversation(file: string): Promise<LoadedConversation>;
+/** 会話の要約の動画の大きさの上限。Discord に添付できる大きさ(10MB) */
+export declare const MAX_CONVERSATION_VIDEO_BYTES: number;
+/** 大きさの上限を超えた動画を移す先のファイル名(作業フォルダーに置く) */
+export declare const OVERSIZE_VIDEO_FILE = "oversize.mp4";
+/**
+ * 動画が大きさの上限を超えていれば、出力先から作業フォルダーの oversize.mp4 に移し、エラーにする。
+ * 出力先に動画を残さないのは、出力先のファイルをそのまま送る使い方(サンドボックス)で、送れない動画を取り出させないため。
+ */
+export declare function assertVideoSize(outFile: string, workDir: string, maxBytes?: number): Promise<number>;
 export interface ConversationRenderInput {
     /** 書かれたままの台本(表示用に整えて描画する。読み上げの単位は check と同じ) */
     raw: ConversationScript;

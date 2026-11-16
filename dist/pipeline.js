@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { bgmGain, bgmLayer } from "./audio/bgm.js";
@@ -311,6 +311,23 @@ export async function loadConversation(file) {
     const { script, facts, persona, readings } = parsed.data;
     return { raw: script, script: normalizeConversationScript(script), facts, persona, readings };
 }
+/** 会話の要約の動画の大きさの上限。Discord に添付できる大きさ(10MB) */
+export const MAX_CONVERSATION_VIDEO_BYTES = 10 * 1024 * 1024;
+/** 大きさの上限を超えた動画を移す先のファイル名(作業フォルダーに置く) */
+export const OVERSIZE_VIDEO_FILE = "oversize.mp4";
+/**
+ * 動画が大きさの上限を超えていれば、出力先から作業フォルダーの oversize.mp4 に移し、エラーにする。
+ * 出力先に動画を残さないのは、出力先のファイルをそのまま送る使い方(サンドボックス)で、送れない動画を取り出させないため。
+ */
+export async function assertVideoSize(outFile, workDir, maxBytes = MAX_CONVERSATION_VIDEO_BYTES) {
+    const { size } = await stat(outFile);
+    if (size <= maxBytes)
+        return size;
+    const moved = path.join(workDir, OVERSIZE_VIDEO_FILE);
+    await rename(outFile, moved);
+    const mb = (n) => (n / 1024 / 1024).toFixed(1);
+    throw new Error(`動画の大きさが ${mb(size)}MB あり、上限の ${mb(maxBytes)}MB を超えています。動画は出力先に置かず、${moved} に移しました。`);
+}
 /** 会話の要約の台本から音声と映像を作り、mp4 に書き出す。BGM と効果音は使わない */
 export async function renderConversation(input, options) {
     const { voice } = options.synth;
@@ -353,6 +370,7 @@ export async function renderConversation(input, options) {
         chromiumPath: options.chromiumPath,
         onProgress: options.onFrameProgress,
     });
+    await assertVideoSize(options.outFile, options.workDir);
     return {
         outFile: options.outFile,
         scriptFile,
