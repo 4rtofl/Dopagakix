@@ -390,6 +390,11 @@ main { position: absolute; top: 230px; left: 80px; right: 80px; height: 1180px; 
 /* 判断事項: 見出しに蛍光ペンの下線 */
 .decision .row-text { font-weight: 400; }
 .d-title { font-size: calc(48 * var(--u)); font-weight: 900; line-height: 1.45; text-wrap: balance; }
+/* 蛍光ペンの下線。判断事項の題目と、流れ図の変更した段の名前に引く(docs/design.md)。折り返した行にもそれぞれ引く */
+.d-title .marker, .step .marker {
+  background: linear-gradient(transparent 62%, var(--marker) 62%);
+  -webkit-box-decoration-break: clone; box-decoration-break: clone;
+}
 .d-detail { margin-top: calc(10 * var(--u)); font-size: calc(34 * var(--u)); font-weight: 500; line-height: 1.6; color: var(--ink-2); text-wrap: pretty; }
 
 /* 図解: 枠と矢印は墨の細い罫線。角丸・影・背景の塗りは使わない(カードに見せない) */
@@ -406,7 +411,7 @@ main { position: absolute; top: 230px; left: 80px; right: 80px; height: 1180px; 
 .step { border: 1.5px solid var(--ink); padding: calc(16 * var(--u)) calc(30 * var(--u)); }
 .step-label { font-size: calc(42 * var(--u)); font-weight: 700; line-height: 1.4; }
 .step-note { margin-top: calc(4 * var(--u)); font-size: calc(30 * var(--u)); font-weight: 500; line-height: 1.5; color: var(--ink-2); }
-.step .marker, .flow-arrow svg { display: block; margin: 0 auto; width: calc(28 * var(--u)); height: calc(52 * var(--u)); }
+.flow-arrow svg { display: block; margin: 0 auto; width: calc(28 * var(--u)); height: calc(52 * var(--u)); }
 .stroke { fill: none; stroke: var(--ink); stroke-width: 2; stroke-dasharray: 1; animation: stroke 0.22s cubic-bezier(0.2, 0, 0, 1) both; }
 @keyframes stroke { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
 
