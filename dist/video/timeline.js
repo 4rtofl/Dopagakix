@@ -1,5 +1,5 @@
 import { durationOf, mixInto, silence } from "../tts/wav.js";
-export const SCENE_KINDS = ["opening", "request", "work", "verification", "decisions", "closing"];
+export const SCENE_KINDS = ["opening", "work", "verification", "decisions", "closing"];
 /** シーン開始から最初の読み上げまで。要素の登場アニメーションを見せる時間。 */
 const LEAD_IN = 0.5;
 /** 文と文の間。0.25 秒では間延びしたため詰めている */
@@ -37,7 +37,6 @@ export function splitCaption(text, max = CAPTION_MAX) {
 export function sceneLines(script) {
     const narration = {
         opening: script.opening.narration,
-        request: script.request.narration,
         work: script.work.narration,
         verification: script.verification.narration,
         decisions: script.decisions.narration,

@@ -2,8 +2,10 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
+import { bgmGain, bgmLayer } from "./audio/bgm.js";
 import { finishAudio } from "./audio/finish.js";
 import { sfxCues, sfxGain, sfxLayers } from "./audio/sfx.js";
+import { isOutputPath } from "./output.js";
 import { redactSecrets } from "./redact.js";
 import { normalizeScript } from "./script/normalize.js";
 import { checkedReadingsFile, compareReadings, loadCheckedReadings, mismatchMessage, reviewReasons, speechUnits, } from "./script/readings.js";
@@ -19,32 +21,26 @@ import { resolveUserPath } from "./util/path.js";
 import { renderVideo } from "./video/render.js";
 import { buildHtml } from "./video/template.js";
 import { buildTimeline } from "./video/timeline.js";
-/** 動画と作業ファイルの出力先(既定) */
-export const DEFAULT_OUT_DIR = "dopagakix-out";
+export { DEFAULT_OUT_DIR } from "./output.js";
 /**
  * 報告のために書いたファイル(台本など)を、作業の成果として数えないよう集計から除く。
  * 既定の出力先(dopagakix-out)の中と、指定したディレクトリの中にあるファイルが対象。
  */
 export function excludeOutputs(facts, dirs = []) {
     const base = facts.cwd ?? process.cwd();
-    const roots = dirs.map((dir) => path.resolve(dir));
-    const isOutput = (file) => {
-        const absolute = path.resolve(base, file);
-        return (absolute.split(path.sep).includes(DEFAULT_OUT_DIR) ||
-            roots.some((root) => absolute === root || absolute.startsWith(`${root}${path.sep}`)));
-    };
-    const files = facts.files.filter((file) => !isOutput(file.path));
+    const files = facts.files.filter((file) => !isOutputPath(file.path, base, dirs));
     return files.length === facts.files.length ? facts : { ...facts, files };
 }
 /**
- * セッションログを探して読み、画面に出す数値を集計する。
- * outputDirs には、報告の台本などを置くディレクトリを渡す(集計から除く)。
+ * セッションログを探して読み、画面に出す数値を集計する。動画レポートを作っていた区間は集計から除く。
+ * outputDirs には、報告の台本などを置くディレクトリを渡す(変更ファイルの集計から除き、
+ * そこのファイルの編集を動画の作成とみなす)。
  */
 export async function loadSession(options, outputDirs = []) {
     const located = await locateTranscript(options);
     const session = await readTranscript(located.file);
     const sessionId = session.sessionId ?? path.basename(located.file, ".jsonl");
-    return { ...located, session, facts: excludeOutputs(collectFacts(session), outputDirs), sessionId };
+    return { ...located, session, facts: excludeOutputs(collectFacts(session, { outputDirs }), outputDirs), sessionId };
 }
 /** セッションログを、振り返り用のダイジェスト(時系列の要約)にする。 */
 export async function digestSession(options) {
@@ -79,8 +75,8 @@ export async function loadReport(file) {
         const parsed = ScriptFileSchema.safeParse(json);
         if (!parsed.success)
             throw formatError(file, parsed.error);
-        const { script, author, facts, persona, sfx, readings } = parsed.data;
-        return { raw: script, script: normalizeScript(script), author, facts, persona, sfx, readings };
+        const { script, author, facts, persona, readings, bgm, sfx } = parsed.data;
+        return { raw: script, script: normalizeScript(script), author, facts, persona, readings, bgm, sfx };
     }
     const parsed = VideoScriptSchema.safeParse(json);
     if (!parsed.success)
@@ -179,6 +175,10 @@ export function resolveRenderPaths(options) {
 }
 /** 読み上げありで、最大音量がこれを下回ったら無音とみなす(CI の確認と同じ基準) */
 export const SILENT_DBFS = -40;
+/** script.json と timeline.json に記録する BGM の設定 */
+function bgmRecord(bgm) {
+    return { file: bgm.file, ...(bgm.credit ? { credit: bgm.credit } : {}), volume: bgm.volume };
+}
 /** script.json と timeline.json に記録する効果音の設定 */
 function sfxRecord(sfx) {
     return { dir: sfx.dir, ...(sfx.credit ? { credit: sfx.credit } : {}), volume: sfx.volume };
@@ -192,8 +192,9 @@ export async function renderReport(input, options) {
         author: input.author,
         ...(input.persona ? { persona: input.persona } : {}),
         voice: voice ? { enabled: true, ...voice } : { enabled: false },
-        ...(input.sfx ? { sfx: sfxRecord(input.sfx) } : {}),
         ...(input.readings ? { readings: input.readings } : {}),
+        ...(input.bgm ? { bgm: bgmRecord(input.bgm) } : {}),
+        ...(input.sfx ? { sfx: sfxRecord(input.sfx) } : {}),
         facts: input.facts,
         script: input.script,
     };
@@ -214,13 +215,16 @@ export async function renderReport(input, options) {
     }
     const narrationFile = path.join(options.workDir, "narration.wav");
     await writeFile(narrationFile, encodeWav(timeline.audio));
-    // 音声の仕上げ: 効果音を混ぜ、動画ごとの音量をそろえる(効果音がなくても同じ処理をかける)
+    // 音声の仕上げ: BGM と効果音を混ぜ、動画ごとの音量をそろえる(どちらもなくても同じ処理をかける)
     const cues = input.sfx ? sfxCues(timeline.scenes, input.script) : [];
     const audio = await finishAudio({
         narrationFile,
-        layers: input.sfx ? sfxLayers(input.sfx, cues) : [],
+        layers: [...(input.bgm ? [bgmLayer(input.bgm, timeline.duration)] : []), ...(input.sfx ? sfxLayers(input.sfx, cues) : [])],
         outFile: path.join(options.workDir, "audio.wav"),
     });
+    const bgm = input.bgm
+        ? { ...bgmRecord(input.bgm), loudness: input.bgm.loudness, gain: Math.round(bgmGain(input.bgm) * 100) / 100 }
+        : null;
     const sfx = input.sfx
         ? {
             ...sfxRecord(input.sfx),
@@ -237,12 +241,13 @@ export async function renderReport(input, options) {
         truePeak: audio.outputTruePeak ?? null,
         normalization: audio.normalization,
     };
-    await writeFile(path.join(options.workDir, "timeline.json"), `${JSON.stringify({ duration: timeline.duration, speed: timeline.speed, credit: timeline.credit, sfx, loudness, scenes: timeline.scenes }, (_key, value) => (typeof value === "number" && !Number.isFinite(value) ? null : value), 2)}\n`);
+    await writeFile(path.join(options.workDir, "timeline.json"), `${JSON.stringify({ duration: timeline.duration, speed: timeline.speed, credit: timeline.credit, bgm, sfx, loudness, scenes: timeline.scenes }, (_key, value) => (typeof value === "number" && !Number.isFinite(value) ? null : value), 2)}\n`);
     const html = buildHtml({
         script: input.script,
         facts: input.facts,
         scenes: timeline.scenes,
         credit: timeline.credit,
+        bgmCredit: input.bgm?.credit,
         sfxCredit: input.sfx?.credit,
         silent: !voice,
         author: input.author,

@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { finishAudio } from "../src/audio/finish.js";
+import { bgmLayer, probeBgm } from "../src/audio/bgm.js";
+import { type AudioLayer, finishAudio } from "../src/audio/finish.js";
 import {
   describeSfx,
   matchSfxFiles,
@@ -343,14 +344,14 @@ describe.runIf(hasFfmpeg)("効果音の合成(結合テスト)", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  async function mix(script: VideoScript, sfxDir: string, name: string) {
+  async function mix(script: VideoScript, sfxDir: string, name: string, extra: (duration: number) => Promise<AudioLayer[]> = async () => []) {
     const timeline = await buildTimeline(script, new ToneSynthesizer(), { maxSeconds: 120, speed: 1, maxSpeed: 1.3 });
     const narrationFile = path.join(dir, `${name}-narration.wav`);
     await writeFile(narrationFile, encodeWav(timeline.audio));
     const sfx = await probeSfx({ dir: sfxDir, volume: 0 });
     const cues = sfxCues(timeline.scenes, script);
     const outFile = path.join(dir, `${name}.wav`);
-    await finishAudio({ narrationFile, layers: sfxLayers(sfx, cues), outFile });
+    await finishAudio({ narrationFile, layers: [...(await extra(timeline.duration)), ...sfxLayers(sfx, cues)], outFile });
     return { timeline, cues, outFile };
   }
 
@@ -362,7 +363,21 @@ describe.runIf(hasFfmpeg)("効果音の合成(結合テスト)", () => {
     // ページの切り替えは 2 秒の長い音にして、読み上げの開始で切れることを確かめる
     makeSfxDir(sfxDir, { page: 2, result: 0.2, end: 0.2 });
     const { timeline, cues, outFile } = await mix(script, sfxDir, "all");
-    expect(cues.map((c) => c.kind)).toEqual(["result", "page", "page", "page", "page", "page", "end"]);
+    expect(cues.map((c) => c.kind)).toEqual(["result", ...timeline.scenes.slice(1).map(() => "page"), "end"]);
+    expectSfx(outFile, timeline.scenes, cues, []);
+    expect(loudnessOf(outFile).integrated).toBeCloseTo(-16, 0);
+  });
+
+  it("BGM と一緒に付けても、3 つの場面で鳴り、読み上げと重ならない", async () => {
+    const script = await loadScript();
+    const sfxDir = path.join(dir, "with-bgm");
+    await mkdir(sfxDir);
+    makeSfxDir(sfxDir, { page: 0.2, result: 0.2, end: 0.2 });
+    // BGM は 60 Hz の合成音にして、効果音の帯域(2 kHz)と分ける
+    const song = path.join(dir, "bgm.wav");
+    makeSine(song, { frequency: 60, seconds: 5 });
+    const bgm = await probeBgm({ file: song, volume: 0 });
+    const { timeline, cues, outFile } = await mix(script, sfxDir, "with-bgm", async (duration) => [bgmLayer(bgm, duration)]);
     expectSfx(outFile, timeline.scenes, cues, []);
     expect(loudnessOf(outFile).integrated).toBeCloseTo(-16, 0);
   });

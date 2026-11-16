@@ -3,6 +3,7 @@ import { readdir } from "node:fs/promises";
 import path from "node:path";
 import { resolveUserPath } from "../util/path.js";
 import { endMarkDelay, RESULT_ROW_DELAY } from "../video/template.js";
+import { parseDuration, parseVolume } from "./bgm.js";
 import { runFfmpeg } from "./ffmpeg.js";
 import { SAMPLE_RATE } from "./finish.js";
 /*
@@ -22,12 +23,6 @@ const KIND_LABELS = { page: "ページの切り替え", result: "結論の表示
 export const SFX_PEAK = -12;
 /** 読み上げの開始で効果音を切るときのフェードアウト(秒) */
 export const SFX_CUT_FADE = 0.05;
-export function parseSfxVolume(value, name = "--sfx-volume") {
-    const n = Number(value);
-    if (value.trim() === "" || !Number.isFinite(n))
-        throw new Error(`${name} には dB の数値を指定してください(例: -6): ${value}`);
-    return n;
-}
 /**
  * 効果音の設定を決める。優先順位は オプション > 環境変数 > script.json の記録。
  * クレジットと音量は、ディレクトリを script.json の記録から使うときだけ記録を引き継ぐ。--no-sfx なら効果音なし。
@@ -42,7 +37,7 @@ export function resolveSfx(flags, env = process.env, recorded) {
         return undefined;
     const credit = flags.sfxCredit || env.DOPAGAKIX_SFX_CREDIT || inherited?.credit || undefined;
     const volume = flags.sfxVolume ??
-        (env.DOPAGAKIX_SFX_VOLUME ? parseSfxVolume(env.DOPAGAKIX_SFX_VOLUME, "環境変数 DOPAGAKIX_SFX_VOLUME") : undefined) ??
+        (env.DOPAGAKIX_SFX_VOLUME ? parseVolume(env.DOPAGAKIX_SFX_VOLUME, "環境変数 DOPAGAKIX_SFX_VOLUME") : undefined) ??
         inherited?.volume ??
         0;
     return { dir, ...(credit ? { credit } : {}), volume };
@@ -72,13 +67,6 @@ export function matchSfxFiles(dir, names) {
         files[kind] = path.join(dir, candidates[0]);
     }
     return files;
-}
-/** ffmpeg の入力情報(Duration: 00:00:01.23)から長さを読む */
-function parseDuration(stderr) {
-    const match = /Duration: (\d+):(\d{2}):(\d{2}(?:\.\d+)?)/.exec(stderr);
-    if (!match)
-        return undefined;
-    return Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]);
 }
 /** volumedetect の最大音量(dBFS)を読む。読めなければ undefined、無音なら -Infinity */
 export function parseMaxVolume(stderr) {

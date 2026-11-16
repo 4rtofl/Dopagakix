@@ -2,7 +2,7 @@ import type { VideoScript } from "../script/schema.js";
 import type { Synthesizer } from "../tts/types.js";
 import { durationOf, mixInto, type Pcm, silence } from "../tts/wav.js";
 
-export const SCENE_KINDS = ["opening", "request", "work", "verification", "decisions", "closing"] as const;
+export const SCENE_KINDS = ["opening", "work", "verification", "decisions", "closing"] as const;
 export type SceneKind = (typeof SCENE_KINDS)[number];
 
 /** 字幕 1 枚分。start〜end は読み上げ音声が鳴っている区間(秒)。 */
@@ -69,7 +69,6 @@ export function splitCaption(text: string, max = CAPTION_MAX): string[] {
 export function sceneLines(script: VideoScript): Array<{ kind: SceneKind; lines: string[] }> {
   const narration: Record<SceneKind, string[]> = {
     opening: script.opening.narration,
-    request: script.request.narration,
     work: script.work.narration,
     verification: script.verification.narration,
     decisions: script.decisions.narration,

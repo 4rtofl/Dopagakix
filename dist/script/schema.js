@@ -17,10 +17,11 @@ export const VideoScriptSchema = z.object({
         .describe("completed=指示どおり完了 / partial=一部完了・残作業あり / blocked=指示者の判断や情報待ちで停止 / failed=目的を達成できなかった"),
     headline: z.string().describe("結論を一文で(全角40文字以内)"),
     opening: z.object({ narration: Narration }),
-    request: z.object({
-        summary: z.string().describe("指示者が依頼した内容の要約(全角60文字以内)"),
-        narration: Narration,
-    }),
+    /**
+     * 廃止(「ご依頼の内容」のシーンはなくした)。以前の台本や script.json を読めるよう受け付けるが、
+     * 表示も読み上げもしない。check は、書かれていれば知らせる。
+     */
+    request: z.unknown().optional().describe("廃止。書いても動画には表示されない"),
     work: z.object({
         items: z.array(z.string()).describe("実施した主な作業。成果ベースで最大5件、各全角28文字以内"),
         narration: Narration,
@@ -72,6 +73,8 @@ export const ScriptFileSchema = z.object({
     sfx: z.object({ dir: z.string(), credit: z.string().optional(), volume: z.number() }).optional(),
     /** 描画に使った読みの指定(組み込み・プロジェクト・台本を合わせた結果)。描画し直しても同じ読みにする */
     readings: VideoScriptSchema.shape.readings,
+    /** BGM の設定。描画し直すときも同じ BGM を使う(オプションや環境変数で指定すればそちらを優先) */
+    bgm: z.object({ file: z.string(), credit: z.string().optional(), volume: z.number() }).optional(),
     facts: SessionFactsSchema,
     script: VideoScriptSchema,
 });

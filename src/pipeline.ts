@@ -2,9 +2,11 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
+import { type BgmSetting, type BgmTrack, bgmGain, bgmLayer } from "./audio/bgm.js";
 import { finishAudio } from "./audio/finish.js";
 import { type SfxSet, type SfxSetting, sfxCues, sfxGain, sfxLayers } from "./audio/sfx.js";
 import type { SessionFacts } from "./facts.js";
+import { isOutputPath } from "./output.js";
 import { redactSecrets } from "./redact.js";
 import { normalizeScript } from "./script/normalize.js";
 import {
@@ -33,8 +35,7 @@ import { type RenderStats, renderVideo } from "./video/render.js";
 import { buildHtml } from "./video/template.js";
 import { buildTimeline } from "./video/timeline.js";
 
-/** 動画と作業ファイルの出力先(既定) */
-export const DEFAULT_OUT_DIR = "dopagakix-out";
+export { DEFAULT_OUT_DIR } from "./output.js";
 
 /**
  * 報告のために書いたファイル(台本など)を、作業の成果として数えないよう集計から除く。
@@ -42,15 +43,7 @@ export const DEFAULT_OUT_DIR = "dopagakix-out";
  */
 export function excludeOutputs(facts: SessionFacts, dirs: string[] = []): SessionFacts {
   const base = facts.cwd ?? process.cwd();
-  const roots = dirs.map((dir) => path.resolve(dir));
-  const isOutput = (file: string) => {
-    const absolute = path.resolve(base, file);
-    return (
-      absolute.split(path.sep).includes(DEFAULT_OUT_DIR) ||
-      roots.some((root) => absolute === root || absolute.startsWith(`${root}${path.sep}`))
-    );
-  };
-  const files = facts.files.filter((file) => !isOutput(file.path));
+  const files = facts.files.filter((file) => !isOutputPath(file.path, base, dirs));
   return files.length === facts.files.length ? facts : { ...facts, files };
 }
 
@@ -62,14 +55,15 @@ export interface LoadedSession extends LocatedTranscript {
 }
 
 /**
- * セッションログを探して読み、画面に出す数値を集計する。
- * outputDirs には、報告の台本などを置くディレクトリを渡す(集計から除く)。
+ * セッションログを探して読み、画面に出す数値を集計する。動画レポートを作っていた区間は集計から除く。
+ * outputDirs には、報告の台本などを置くディレクトリを渡す(変更ファイルの集計から除き、
+ * そこのファイルの編集を動画の作成とみなす)。
  */
 export async function loadSession(options: LocateOptions, outputDirs: string[] = []): Promise<LoadedSession> {
   const located = await locateTranscript(options);
   const session = await readTranscript(located.file);
   const sessionId = session.sessionId ?? path.basename(located.file, ".jsonl");
-  return { ...located, session, facts: excludeOutputs(collectFacts(session), outputDirs), sessionId };
+  return { ...located, session, facts: excludeOutputs(collectFacts(session, { outputDirs }), outputDirs), sessionId };
 }
 
 export interface DigestResult {
@@ -108,10 +102,12 @@ export interface LoadedReport {
   /** script.json(描画したときの記録)から読んだ場合の事実情報 */
   facts?: SessionFacts;
   persona?: { id: string; name: string };
-  /** script.json に記録された効果音の設定 */
-  sfx?: SfxSetting;
   /** script.json に記録された、描画に使った読みの指定 */
   readings?: Readings;
+  /** script.json に記録された BGM の設定 */
+  bgm?: BgmSetting;
+  /** script.json に記録された効果音の設定 */
+  sfx?: SfxSetting;
 }
 
 function formatError(file: string, error: z.ZodError): Error {
@@ -132,8 +128,8 @@ export async function loadReport(file: string): Promise<LoadedReport> {
   if (json !== null && typeof json === "object" && "version" in json) {
     const parsed = ScriptFileSchema.safeParse(json);
     if (!parsed.success) throw formatError(file, parsed.error);
-    const { script, author, facts, persona, sfx, readings } = parsed.data;
-    return { raw: script, script: normalizeScript(script), author, facts, persona, sfx, readings };
+    const { script, author, facts, persona, readings, bgm, sfx } = parsed.data;
+    return { raw: script, script: normalizeScript(script), author, facts, persona, readings, bgm, sfx };
   }
   const parsed = VideoScriptSchema.safeParse(json);
   if (!parsed.success) throw formatError(file, parsed.error);
@@ -279,10 +275,12 @@ export interface RenderInput {
   facts: SessionFacts;
   author: Author;
   persona?: { id: string; name: string };
-  /** 効果音(probeSfx で確かめたもの)。なければ効果音なし */
-  sfx?: SfxSet;
   /** 描画に使う読みの指定(script.json に記録し、描画し直しても同じ読みにする) */
   readings?: Readings;
+  /** BGM(probeBgm で確かめたもの)。なければ BGM なし */
+  bgm?: BgmTrack;
+  /** 効果音(probeSfx で確かめたもの)。なければ効果音なし */
+  sfx?: SfxSet;
 }
 
 export interface RenderPipelineOptions {
@@ -306,7 +304,7 @@ export interface RenderResult {
   outFile: string;
   /** 描画に使った台本と事実情報の記録 */
   scriptFile: string;
-  /** 仕上げた音声(効果音を混ぜ、音量をそろえたもの) */
+  /** 仕上げた音声(BGM と効果音を混ぜ、音量をそろえたもの) */
   audioFile: string;
   duration: number;
   speed: number;
@@ -316,6 +314,11 @@ export interface RenderResult {
 
 /** 読み上げありで、最大音量がこれを下回ったら無音とみなす(CI の確認と同じ基準) */
 export const SILENT_DBFS = -40;
+
+/** script.json と timeline.json に記録する BGM の設定 */
+function bgmRecord(bgm: BgmTrack): BgmSetting {
+  return { file: bgm.file, ...(bgm.credit ? { credit: bgm.credit } : {}), volume: bgm.volume };
+}
 
 /** script.json と timeline.json に記録する効果音の設定 */
 function sfxRecord(sfx: SfxSet): SfxSetting {
@@ -331,8 +334,9 @@ export async function renderReport(input: RenderInput, options: RenderPipelineOp
     author: input.author,
     ...(input.persona ? { persona: input.persona } : {}),
     voice: voice ? { enabled: true, ...voice } : { enabled: false },
-    ...(input.sfx ? { sfx: sfxRecord(input.sfx) } : {}),
     ...(input.readings ? { readings: input.readings } : {}),
+    ...(input.bgm ? { bgm: bgmRecord(input.bgm) } : {}),
+    ...(input.sfx ? { sfx: sfxRecord(input.sfx) } : {}),
     facts: input.facts,
     script: input.script,
   };
@@ -356,13 +360,16 @@ export async function renderReport(input: RenderInput, options: RenderPipelineOp
   }
   const narrationFile = path.join(options.workDir, "narration.wav");
   await writeFile(narrationFile, encodeWav(timeline.audio));
-  // 音声の仕上げ: 効果音を混ぜ、動画ごとの音量をそろえる(効果音がなくても同じ処理をかける)
+  // 音声の仕上げ: BGM と効果音を混ぜ、動画ごとの音量をそろえる(どちらもなくても同じ処理をかける)
   const cues = input.sfx ? sfxCues(timeline.scenes, input.script) : [];
   const audio = await finishAudio({
     narrationFile,
-    layers: input.sfx ? sfxLayers(input.sfx, cues) : [],
+    layers: [...(input.bgm ? [bgmLayer(input.bgm, timeline.duration)] : []), ...(input.sfx ? sfxLayers(input.sfx, cues) : [])],
     outFile: path.join(options.workDir, "audio.wav"),
   });
+  const bgm = input.bgm
+    ? { ...bgmRecord(input.bgm), loudness: input.bgm.loudness, gain: Math.round(bgmGain(input.bgm) * 100) / 100 }
+    : null;
   const sfx = input.sfx
     ? {
         ...sfxRecord(input.sfx),
@@ -382,7 +389,7 @@ export async function renderReport(input: RenderInput, options: RenderPipelineOp
   await writeFile(
     path.join(options.workDir, "timeline.json"),
     `${JSON.stringify(
-      { duration: timeline.duration, speed: timeline.speed, credit: timeline.credit, sfx, loudness, scenes: timeline.scenes },
+      { duration: timeline.duration, speed: timeline.speed, credit: timeline.credit, bgm, sfx, loudness, scenes: timeline.scenes },
       (_key, value: unknown) => (typeof value === "number" && !Number.isFinite(value) ? null : value),
       2,
     )}\n`,
@@ -393,6 +400,7 @@ export async function renderReport(input: RenderInput, options: RenderPipelineOp
     facts: input.facts,
     scenes: timeline.scenes,
     credit: timeline.credit,
+    bgmCredit: input.bgm?.credit,
     sfxCredit: input.sfx?.credit,
     silent: !voice,
     author: input.author,

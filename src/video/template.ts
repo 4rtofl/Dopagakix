@@ -11,6 +11,8 @@ export interface TemplateInput {
   facts: SessionFacts;
   scenes: TimedScene[];
   credit?: string;
+  /** BGM のクレジット。最終ページにそのまま表示する(下部の柱は幅が足りないため出さない) */
+  bgmCredit?: string;
   /** 効果音のクレジット。最終ページにそのまま表示する */
   sfxCredit?: string;
   /** 読み上げなし(字幕のみ)。柱に「音声なし」と出し、無音が意図したものだと分かるようにする */
@@ -135,13 +137,6 @@ function openingScene(script: VideoScript, facts: SessionFacts, timeZone?: strin
     ${period ? `<div ${enter("when", 6)}>${escapeHtml(period)}</div>` : ""}`;
 }
 
-function requestScene(script: VideoScript, facts: SessionFacts): string {
-  return `
-    ${sectionHead("ご依頼の内容")}
-    <blockquote ${enter("quote", 1)}>「${escapeHtml(script.request.summary)}」</blockquote>
-    <div ${enter("note", 2)}>指示 ${number(facts.userPrompts)} 回 ・ ツール実行 ${number(facts.toolCalls)} 回</div>`;
-}
-
 function fileList(files: FileChange[], limit: number): string {
   if (files.length === 0) return "";
   const shown = files.slice(0, limit);
@@ -209,6 +204,7 @@ function closingScene(
   script: VideoScript,
   facts: SessionFacts,
   credit: string | undefined,
+  bgmCredit: string | undefined,
   sfxCredit: string | undefined,
   author: Author,
   timeZone?: string,
@@ -226,6 +222,7 @@ function closingScene(
       ? `報告: 作業をした AI エージェント${models}による自己報告。数値はセッションログから自動集計`
       : "報告: 手動で作成。数値はセッションログから自動集計",
     credit ? `音声: ${credit}` : undefined,
+    bgmCredit,
     sfxCredit,
     `セッション ${facts.sessionId?.slice(0, 8) ?? "-"} ・ ${formatDateTime(facts.endTime, timeZone) || "-"}`,
   ]
@@ -324,13 +321,6 @@ main { position: absolute; top: 230px; left: 80px; right: 80px; height: 1180px; 
 .section-title { font-size: calc(42 * var(--u)); font-weight: 900; letter-spacing: 0.04em; }
 .section.attention .rule { border-top-color: var(--attention); border-top-width: 4px; }
 .section.attention .section-title { color: var(--attention); }
-
-/* 依頼 */
-.quote {
-  font-family: var(--serif); font-weight: 700; font-size: calc(60 * var(--u)); line-height: 1.6;
-  text-indent: -0.5em; padding-left: 0.5em; text-wrap: pretty; font-feature-settings: "palt";
-}
-.note { font-size: calc(28 * var(--u)); color: var(--ink-3); }
 
 /* 罫線で区切った行 */
 .rows { list-style: none; display: flex; flex-direction: column; }
@@ -471,14 +461,13 @@ const PAGE_SCRIPT = String.raw`
 
 /** 動画 1 本分のページを作る。フォントは /fonts/ 以下から読み込む前提。 */
 export function buildHtml(input: TemplateInput): string {
-  const { script, facts, scenes, credit, sfxCredit, silent, author, timeZone } = input;
+  const { script, facts, scenes, credit, bgmCredit, sfxCredit, silent, author, timeZone } = input;
   const bodies = {
     opening: openingScene(script, facts, timeZone),
-    request: requestScene(script, facts),
     work: workScene(script, facts),
     verification: verificationScene(script),
     decisions: decisionsScene(script),
-    closing: closingScene(script, facts, credit, sfxCredit, author, timeZone),
+    closing: closingScene(script, facts, credit, bgmCredit, sfxCredit, author, timeZone),
   };
   const sections = scenes
     .map((scene) => `<section class="scene" data-kind="${scene.kind}"><div class="content">${bodies[scene.kind]}</div></section>`)
