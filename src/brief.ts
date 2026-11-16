@@ -92,6 +92,8 @@ export interface BriefInput {
   renderCommand: string;
   digestCommand: string;
   persona?: Persona;
+  /** 読みの指定の件数 */
+  readings: { builtin: number; project: number; projectFile?: string };
   seconds: number;
   environment: EnvironmentItem[];
   timeZone?: string;
@@ -140,6 +142,14 @@ export function buildBrief(input: BriefInput): string {
     "- 変更ファイルと行数は、Edit / Write ツールでの変更だけを数えたもの(シェルのコマンドで変更・削除したファイルは含まない)",
     "",
     ...voice,
+    "",
+    "## 読み",
+    "- check が全ての読み上げ文の読み(VOICEVOX が読むカタカナ)を表示する。1 文ずつ確かめ、誤読があれば台本の readings で直す。render は check で確かめた読みでだけ音声を作る。",
+    `- 読みの指定: 組み込み ${number(input.readings.builtin)} 件、プロジェクトの辞書 ${number(input.readings.project)} 件` +
+      (input.readings.projectFile ? `(${input.readings.projectFile})` : "(git のリポジトリの外のため、なし)") +
+      "。台本の readings が最も優先される。",
+    '- 書き方: 台本に "readings": { "重複した行": "重複したぎょう", "README": "リードミー" } のように「表記: 読み」で書く。置き換わるのは VOICEVOX に送る文だけで、字幕と画面の文字は元の表記のまま。',
+    "- 誤読した語は前後を含めた表記で指定する(1 文字の表記は警告)。読みはひらがなかカタカナで、英字の略語は読ませたい読み(例: エヌピーエム)をカタカナで書く。",
     "",
     "## 長さ",
     `- narration は全シーン合計で全角 ${narrationBudget(input.seconds)} 文字程度(約 ${input.seconds} 秒)。1 文は ${SENTENCE_LIMIT} 文字以内、各シーン 1〜3 文。`,

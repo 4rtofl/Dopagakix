@@ -1,3 +1,4 @@
+import { applyReadings, type Readings, readingOf } from "../script/readings.js";
 import type { Synthesizer, VoiceInfo } from "./types.js";
 import { type Pcm, parseWav } from "./wav.js";
 
@@ -58,6 +59,11 @@ export class VoicevoxClient {
     await this.request(`/initialize_speaker?speaker=${speaker}&skip_reinit=true`, { method: "POST" });
   }
 
+  /** ユーザー辞書の一覧(読みの確認がエンジンの状態を変えていないことを確かめるのに使う) */
+  async userDict(): Promise<Record<string, unknown>> {
+    return (await (await this.request("/user_dict")).json()) as Record<string, unknown>;
+  }
+
   async audioQuery(text: string, speaker: number): Promise<Record<string, unknown>> {
     // enable_katakana_english: 英単語をカタカナ読みに変換させる(無効だと 1 文字ずつ読み上げる)
     const params = new URLSearchParams({ text, speaker: String(speaker), enable_katakana_english: "true" });
@@ -96,14 +102,30 @@ export interface VoicevoxOptions {
   speaker?: number;
   /** クレジット表記を指定する(規約の書式が変わった場合など)。省略時は creditFor で決める */
   credit?: string;
+  /** 読みの指定。VOICEVOX に送る文だけを置き換える(エンジンのユーザー辞書は変えない) */
+  readings?: Readings;
   fetch?: typeof fetch;
 }
 
+/** 読み上げ文を VOICEVOX がどう読むか */
+export interface SpokenText {
+  /** VOICEVOX に送る文(読みの指定で置き換えたもの) */
+  sent: string;
+  /** AquesTalk 風記法の読み(AudioQuery.kana) */
+  kana: string;
+  /** 確認用の読み(カタカナ。句の区切りは空白、アクセント記号なし) */
+  reading: string;
+}
+
 export class VoicevoxSynthesizer implements Synthesizer {
+  /** 送る文ごとの AudioQuery。読みを確かめたクエリのまま音声を作るため、一度作ったものを使い回す */
+  private readonly queries = new Map<string, Promise<Record<string, unknown>>>();
+
   private constructor(
     private readonly client: VoicevoxClient,
     readonly voice: VoiceInfo,
     readonly credit: string,
+    readonly readings: Readings,
   ) {}
 
   /** エンジンへの接続と話者の存在を確かめてから作る。 */
@@ -117,11 +139,40 @@ export class VoicevoxSynthesizer implements Synthesizer {
       throw new VoicevoxError(`話者 ID ${speaker} はこのエンジンにありません。\`dopagakix speakers\` で一覧を確認してください。`);
     }
     await client.initializeSpeaker(speaker);
-    return new VoicevoxSynthesizer(client, { speaker, name: owner.name, style: style.name }, options.credit ?? creditFor(owner.name));
+    return new VoicevoxSynthesizer(
+      client,
+      { speaker, name: owner.name, style: style.name },
+      options.credit ?? creditFor(owner.name),
+      options.readings ?? {},
+    );
+  }
+
+  /** エンジンのバージョン */
+  async engineVersion(): Promise<string> {
+    return this.client.version();
+  }
+
+  private query(sent: string): Promise<Record<string, unknown>> {
+    let query = this.queries.get(sent);
+    if (!query) {
+      query = this.client.audioQuery(sent, this.voice.speaker);
+      // 失敗したものは使い回さない
+      query.catch(() => this.queries.delete(sent));
+      this.queries.set(sent, query);
+    }
+    return query;
+  }
+
+  /** 読み上げ文を VOICEVOX がどう読むかを調べる。ここで調べたクエリで synthesize が音声を作る */
+  async inspect(text: string): Promise<SpokenText> {
+    const sent = applyReadings(text, this.readings);
+    const kana = (await this.query(sent)).kana;
+    if (typeof kana !== "string") throw new VoicevoxError("VOICEVOX エンジンの応答(/audio_query)に読み(kana)がありません。");
+    return { sent, kana, reading: readingOf(kana) };
   }
 
   async synthesize(text: string, speed: number): Promise<Pcm> {
-    const query = await this.client.audioQuery(text, this.voice.speaker);
+    const query = structuredClone(await this.query(applyReadings(text, this.readings)));
     query.speedScale = speed;
     // 文頭・文末の無音は字幕の切り替えに合わせて自前で入れるため短くする
     query.prePhonemeLength = 0.05;
