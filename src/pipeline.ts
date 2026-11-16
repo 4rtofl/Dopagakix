@@ -4,6 +4,15 @@ import path from "node:path";
 import { z } from "zod";
 import { type BgmSetting, type BgmTrack, bgmGain, bgmLayer } from "./audio/bgm.js";
 import { finishAudio } from "./audio/finish.js";
+import { normalizeConversationScript } from "./conversation/normalize.js";
+import {
+  CONVERSATION_VERSION,
+  type ConversationFacts,
+  type ConversationFile,
+  ConversationFileSchema,
+  type ConversationScript,
+  isConversationFile,
+} from "./conversation/schema.js";
 import { type SfxSet, type SfxSetting, sfxCues, sfxGain, sfxLayers } from "./audio/sfx.js";
 import type { SessionFacts } from "./facts.js";
 import { isOutputPath } from "./output.js";
@@ -13,6 +22,7 @@ import {
   type CheckedReadings,
   checkedReadingsFile,
   compareReadings,
+  conversationSceneLines,
   loadCheckedReadings,
   mismatchMessage,
   type Readings,
@@ -33,7 +43,8 @@ import type { ParsedSession } from "./transcript/types.js";
 import { resolveUserPath } from "./util/path.js";
 import { type RenderStats, renderVideo } from "./video/render.js";
 import { buildHtml } from "./video/template.js";
-import { buildTimeline } from "./video/timeline.js";
+import { buildConversationHtml } from "./video/conversation.js";
+import { buildSceneTimeline, type SceneLines, sceneLines, type Timeline } from "./video/timeline.js";
 
 export { DEFAULT_OUT_DIR } from "./output.js";
 
@@ -188,8 +199,13 @@ export interface InspectedSentence extends SpeechUnit, SpokenText {
 
 /** 台本の全ての読み上げ文を、描画と同じ単位で VOICEVOX に通し、読みを調べる */
 export async function inspectReadings(script: VideoScript, synth: VoicevoxSynthesizer): Promise<InspectedSentence[]> {
+  return inspectUnits(speechUnits(script), synth);
+}
+
+/** 読み上げる単位(speechUnits・conversationSpeechUnits)ごとに VOICEVOX に通し、読みを調べる */
+export async function inspectUnits(units: SpeechUnit[], synth: VoicevoxSynthesizer): Promise<InspectedSentence[]> {
   const inspected: InspectedSentence[] = [];
-  for (const unit of speechUnits(script)) {
+  for (const unit of units) {
     const spoken = await synth.inspect(unit.text);
     inspected.push({ ...unit, ...spoken, reasons: reviewReasons(spoken.sent, spoken.kana) });
   }
@@ -219,10 +235,15 @@ export async function saveCheckedReadings(
  * 動画の読みは check で表示した読みと必ず一致する。
  */
 export async function verifyReadings(report: string, script: VideoScript, synth: VoicevoxSynthesizer): Promise<number> {
+  return verifyUnits(report, speechUnits(script), synth);
+}
+
+/** verifyReadings と同じ照らし合わせを、読み上げる単位を渡して行う */
+export async function verifyUnits(report: string, units: SpeechUnit[], synth: VoicevoxSynthesizer): Promise<number> {
   const file = checkedReadingsFile(report);
   const checked = await loadCheckedReadings(file);
   if (!checked) throw new Error(mismatchMessage([], file, false));
-  const inspected = await inspectReadings(script, synth);
+  const inspected = await inspectUnits(units, synth);
   const mismatches = compareReadings(inspected, checked);
   if (mismatches.length > 0) throw new Error(mismatchMessage(mismatches, file, true));
   return inspected.length;
@@ -247,18 +268,22 @@ export interface RenderPathOptions {
   out?: string;
   /** 完成した動画だけを置くフォルダ */
   videoDir?: string;
+  /** 作業ファイルを置くフォルダ(-o や保存先の指定より優先する) */
+  workDir?: string;
 }
 
 /**
  * 動画と作業ファイル(narration.wav・timeline.json・script.json)の置き場所を決める。
  * -o を最優先し、保存先の指定があれば動画だけを「台本のフォルダ名-タイトル.mp4」としてそこに置く。
+ * 作業フォルダーの指定(--work-dir)があれば、作業ファイルはそこに置く(動画の名前のフォルダ名は作業フォルダーの名前)。
  */
 export function resolveRenderPaths(options: RenderPathOptions): { outFile: string; workDir: string } {
+  const explicitWorkDir = options.workDir ? resolveUserPath(options.workDir) : undefined;
   if (options.out) {
     const outFile = path.resolve(options.out);
-    return { outFile, workDir: path.dirname(outFile) };
+    return { outFile, workDir: explicitWorkDir ?? path.dirname(outFile) };
   }
-  const workDir = path.dirname(path.resolve(options.report));
+  const workDir = explicitWorkDir ?? path.dirname(path.resolve(options.report));
   if (!options.videoDir) return { outFile: path.join(workDir, "summary.mp4"), workDir };
 
   const videoDir = resolveUserPath(options.videoDir);
@@ -325,6 +350,29 @@ function sfxRecord(sfx: SfxSet): SfxSetting {
   return { dir: sfx.dir, ...(sfx.credit ? { credit: sfx.credit } : {}), volume: sfx.volume };
 }
 
+/** 読み上げ音声を合成してシーンと字幕の時刻を決め、作業フォルダーに narration.wav を書く。音声がほぼ無音ならエラーにする */
+async function narrate(scenes: SceneLines[], options: RenderPipelineOptions): Promise<{ timeline: Timeline; narrationFile: string }> {
+  const { voice } = options.synth;
+  const timeline = await buildSceneTimeline(scenes, options.synth, {
+    maxSeconds: options.maxSeconds,
+    speed: options.speed,
+    maxSpeed: options.maxSpeed,
+    onProgress: options.onSpeechProgress,
+  });
+  if (voice) {
+    const peak = peakDbfs(timeline.audio);
+    if (peak < SILENT_DBFS) {
+      const level = Number.isFinite(peak) ? `最大音量 ${peak.toFixed(1)} dBFS` : "完全な無音";
+      throw new Error(
+        `読み上げの音声がほぼ無音です(${level}。${SILENT_DBFS} dBFS 未満)。VOICEVOX エンジン(${voice.name}、スタイル ID ${voice.speaker})の状態を確かめてください。`,
+      );
+    }
+  }
+  const narrationFile = path.join(options.workDir, "narration.wav");
+  await writeFile(narrationFile, encodeWav(timeline.audio));
+  return { timeline, narrationFile };
+}
+
 /** 台本から音声と映像を作り、mp4 に書き出す。 */
 export async function renderReport(input: RenderInput, options: RenderPipelineOptions): Promise<RenderResult> {
   const { voice } = options.synth;
@@ -343,23 +391,7 @@ export async function renderReport(input: RenderInput, options: RenderPipelineOp
   const scriptFile = path.join(options.workDir, "script.json");
   await writeFile(scriptFile, `${JSON.stringify(record, null, 2)}\n`);
 
-  const timeline = await buildTimeline(input.script, options.synth, {
-    maxSeconds: options.maxSeconds,
-    speed: options.speed,
-    maxSpeed: options.maxSpeed,
-    onProgress: options.onSpeechProgress,
-  });
-  if (voice) {
-    const peak = peakDbfs(timeline.audio);
-    if (peak < SILENT_DBFS) {
-      const level = Number.isFinite(peak) ? `最大音量 ${peak.toFixed(1)} dBFS` : "完全な無音";
-      throw new Error(
-        `読み上げの音声がほぼ無音です(${level}。${SILENT_DBFS} dBFS 未満)。VOICEVOX エンジン(${voice.name}、スタイル ID ${voice.speaker})の状態を確かめてください。`,
-      );
-    }
-  }
-  const narrationFile = path.join(options.workDir, "narration.wav");
-  await writeFile(narrationFile, encodeWav(timeline.audio));
+  const { timeline, narrationFile } = await narrate(sceneLines(input.script), options);
   // 音声の仕上げ: BGM と効果音を混ぜ、動画ごとの音量をそろえる(どちらもなくても同じ処理をかける)
   const cues = input.sfx ? sfxCues(timeline.scenes, input.script) : [];
   const audio = await finishAudio({
@@ -404,6 +436,108 @@ export async function renderReport(input: RenderInput, options: RenderPipelineOp
     sfxCredit: input.sfx?.credit,
     silent: !voice,
     author: input.author,
+    timeZone: options.timeZone,
+  });
+  const stats = await renderVideo(html, {
+    outFile: options.outFile,
+    audioFile: audio.outFile,
+    duration: timeline.duration,
+    fps: options.fps,
+    scale: options.scale,
+    chromiumPath: options.chromiumPath,
+    onProgress: options.onFrameProgress,
+  });
+  return {
+    outFile: options.outFile,
+    scriptFile,
+    audioFile: audio.outFile,
+    duration: timeline.duration,
+    speed: timeline.speed,
+    credit: timeline.credit,
+    stats,
+  };
+}
+
+export interface LoadedConversation {
+  /** 書かれたままの台本(確認に使う) */
+  raw: ConversationScript;
+  /** 表示用に整えた台本 */
+  script: ConversationScript;
+  facts: ConversationFacts;
+  persona?: { id: string; name: string };
+  /** script.json に記録された、描画に使った読みの指定 */
+  readings?: Readings;
+}
+
+async function readJson(file: string): Promise<unknown> {
+  try {
+    return JSON.parse(await readFile(file, "utf8"));
+  } catch (error) {
+    throw new Error(`${file} を JSON として読めません: ${(error as Error).message}`);
+  }
+}
+
+/** 台本のファイルが、会話の要約(kind: "conversation")か */
+export async function isConversationInput(file: string): Promise<boolean> {
+  return isConversationFile(await readJson(file));
+}
+
+/** 会話の要約のファイル(台本と数値。render が残した script.json も同じ形式)を読む */
+export async function loadConversation(file: string): Promise<LoadedConversation> {
+  const parsed = ConversationFileSchema.safeParse(await readJson(file));
+  if (!parsed.success) throw formatError(file, parsed.error);
+  const { script, facts, persona, readings } = parsed.data;
+  return { raw: script, script: normalizeConversationScript(script), facts, persona, readings };
+}
+
+export interface ConversationRenderInput {
+  /** 書かれたままの台本(表示用に整えて描画する。読み上げの単位は check と同じ) */
+  raw: ConversationScript;
+  facts: ConversationFacts;
+  persona?: { id: string; name: string };
+  readings?: Readings;
+}
+
+/** 会話の要約の台本から音声と映像を作り、mp4 に書き出す。BGM と効果音は使わない */
+export async function renderConversation(input: ConversationRenderInput, options: RenderPipelineOptions): Promise<RenderResult> {
+  const { voice } = options.synth;
+  const script = normalizeConversationScript(input.raw);
+  const record: ConversationFile = {
+    kind: "conversation",
+    version: CONVERSATION_VERSION,
+    generatedAt: new Date().toISOString(),
+    ...(input.persona ? { persona: input.persona } : {}),
+    voice: voice ? { enabled: true, ...voice } : { enabled: false },
+    ...(input.readings ? { readings: input.readings } : {}),
+    facts: input.facts,
+    script: input.raw,
+  };
+  const scriptFile = path.join(options.workDir, "script.json");
+  await writeFile(scriptFile, `${JSON.stringify(record, null, 2)}\n`);
+
+  const { timeline, narrationFile } = await narrate(conversationSceneLines(input.raw), options);
+  const audio = await finishAudio({ narrationFile, layers: [], outFile: path.join(options.workDir, "audio.wav") });
+  const loudness = {
+    input: audio.inputLoudness,
+    output: audio.outputLoudness ?? null,
+    truePeak: audio.outputTruePeak ?? null,
+    normalization: audio.normalization,
+  };
+  await writeFile(
+    path.join(options.workDir, "timeline.json"),
+    `${JSON.stringify(
+      { duration: timeline.duration, speed: timeline.speed, credit: timeline.credit, loudness, scenes: timeline.scenes },
+      (_key, value: unknown) => (typeof value === "number" && !Number.isFinite(value) ? null : value),
+      2,
+    )}\n`,
+  );
+
+  const html = buildConversationHtml({
+    script,
+    facts: input.facts,
+    scenes: timeline.scenes,
+    credit: timeline.credit,
+    silent: !voice,
     timeZone: options.timeZone,
   });
   const stats = await renderVideo(html, {

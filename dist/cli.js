@@ -8,9 +8,10 @@ import { describeBgm, parseVolume, probeBgm, resolveBgm } from "./audio/bgm.js";
 import { describeSfx, probeSfx, resolveSfx } from "./audio/sfx.js";
 import { buildBrief, checkEnvironment } from "./brief.js";
 import { personaMismatch, resolvePersona } from "./persona.js";
-import { assertVoiceAllowed, createSynthesizer, DEFAULT_OUT_DIR, digestSession, inspectReadings, loadReport, loadSession, prepareOutputRoot, renderReport, resolveRenderPaths, saveCheckedReadings, verifyReadings, } from "./pipeline.js";
+import { assertVoiceAllowed, createSynthesizer, DEFAULT_OUT_DIR, digestSession, inspectUnits, isConversationInput, loadConversation, loadReport, loadSession, prepareOutputRoot, renderConversation, renderReport, resolveRenderPaths, saveCheckedReadings, verifyReadings, verifyUnits, } from "./pipeline.js";
+import { checkConversationScript } from "./conversation/check.js";
 import { checkScript } from "./script/check.js";
-import { BUILTIN_READINGS, loadProjectReadings, resolveReadings } from "./script/readings.js";
+import { BUILTIN_READINGS, conversationSpeechUnits, loadProjectReadings, resolveReadings, speechUnits, } from "./script/readings.js";
 import { STATUS_LABELS } from "./script/schema.js";
 import { installSkill, SKILL_NAME, skillsDir } from "./skill.js";
 import { DEFAULT_MAX_DIGEST_CHARS } from "./transcript/digest.js";
@@ -214,77 +215,127 @@ withSfxOptions(withBgmOptions(withVideoDirOption(withCreditOption(withSecondsOpt
     if (environment.some((item) => item.status === "missing"))
         process.exitCode = 1;
 });
-withSecondsOption(withVoiceOptions(withSessionOptions(program
-    .command("check")
-    .description("台本を確かめる(形式、口調、長さ、読み上げにくい表記、数値との食い違い、全文の読み)。確かめた読みは render が照らし合わせる。描画はしない")
-    .argument("<report>", "台本(report.json)または script.json のパス")))).action(async (reportPath, flags) => {
-    const report = await loadReport(reportPath);
-    let facts = report.facts;
-    let compared = "script.json に記録された数値と照合";
-    if (!facts) {
-        try {
-            const loaded = await loadSession(locateOptions(flags), [path.dirname(path.resolve(reportPath))]);
-            facts = loaded.facts;
-            compared = `セッション ${loaded.sessionId.slice(0, 8)} のログ(${FOUND_BY[loaded.how]})と照合`;
-        }
-        catch (error) {
-            compared = `省略(${error.message})`;
-        }
-    }
-    const persona = await choosePersona(flags);
-    const result = checkScript(report.raw, { persona, facts, seconds: flags.seconds });
-    const resolved = await resolveReadings(report.raw, report.readings);
-    const issues = [...result.issues, ...readingIssues(resolved)];
+function checkText(output, status) {
+    const { narration, readings } = output;
     const lines = [
-        `形式: 正しい(「${report.script.title}」、${STATUS_LABELS[report.script.status]})`,
-        `読み上げ文: ${result.sentences} 文、計 ${result.narrationChars} 文字(目安 ${result.budget} 文字、約 ${flags.seconds} 秒)`,
-        `口調: ${persona ? `${persona.name}(文末を確認)` : "丁寧語"}`,
-        `数値: ${compared}`,
-        issues.length > 0 ? `警告 ${issues.length} 件:` : "警告: なし",
-        ...issues.map((issue) => `- ${issue.at}: ${issue.message}`),
+        `形式: 正しい(「${output.title}」、${status})`,
+        `読み上げ文: ${narration.sentences} 文、計 ${narration.chars} 文字(目安 ${narration.budget} 文字、約 ${narration.seconds} 秒)`,
+        `口調: ${output.persona ? `${output.persona}(文末を確認)` : "丁寧語"}`,
+        ...(output.facts ? [`数値: ${output.facts}`] : []),
+        output.issues.length > 0 ? `警告 ${output.issues.length} 件:` : "警告: なし",
+        ...output.issues.map((issue) => `- ${issue.at}: ${issue.message}`),
     ];
-    if (!flags.voice) {
-        lines.push("読み: 省略(読み上げなし)");
-        process.stdout.write(`${lines.join("\n")}\n`);
-        return;
-    }
-    // 読みは VOICEVOX が決めるため、エンジンに通して確かめる。確かめた読みは render が照らし合わせる
-    let readingError;
-    try {
-        const synth = await createSynthesizer({ ...flags, readings: resolved.readings, startCommand: engineStart.command, onStart: engineStart.onStart });
-        if (!(synth instanceof VoicevoxSynthesizer))
-            throw new Error("VOICEVOX の合成器を作れませんでした。");
-        const engineVersion = await synth.engineVersion();
-        const inspected = await inspectReadings(report.raw, synth);
-        const review = inspected.filter((sentence) => sentence.reasons.length > 0).length;
-        lines.push("", `読み(VOICEVOX ENGINE ${engineVersion}、${synth.voice.name}): ${inspected.length} 文${review > 0 ? `、うち要確認 ${review} 文` : ""}`, ...inspected.flatMap((sentence) => [
-            `- ${sentence.reasons.length > 0 ? "[要確認] " : ""}${sentence.at}「${sentence.text}」`,
+    if (readings.status === "skipped")
+        lines.push(`読み: 省略(${readings.reason})`);
+    else if (readings.status === "failed")
+        lines.push("", `読み: 確かめられませんでした(${readings.error})`);
+    else {
+        lines.push("", `読み(VOICEVOX ENGINE ${readings.engine}、${readings.speaker.name}): ${readings.sentences.length} 文${readings.review > 0 ? `、うち要確認 ${readings.review} 文` : ""}`, ...readings.sentences.flatMap((sentence) => [
+            `- ${sentence.review ? "[要確認] " : ""}${sentence.at}「${sentence.text}」`,
             `  → ${sentence.reading}`,
             ...(sentence.sent !== sentence.text ? [`  (VOICEVOX に送る文: ${sentence.sent})`] : []),
             ...sentence.reasons.map((reason) => `  要確認: ${reason}`),
         ]), "", "全文の読みを 1 文ずつ確かめてください。誤読があれば台本の readings で直し、もう一度 check を実行します。");
+    }
+    return `${lines.join("\n")}\n`;
+}
+/** 全文を VOICEVOX に通して読みを確かめ、確かめた読みを保存する(render が照らし合わせる) */
+async function checkReadings(reportPath, units, readings, flags) {
+    if (!flags.voice)
+        return { status: "skipped", reason: "読み上げなし" };
+    try {
+        const synth = await createSynthesizer({ ...flags, readings, startCommand: engineStart.command, onStart: engineStart.onStart });
+        if (!(synth instanceof VoicevoxSynthesizer))
+            throw new Error("VOICEVOX の合成器を作れませんでした。");
+        const engineVersion = await synth.engineVersion();
+        const inspected = await inspectUnits(units, synth);
         const saved = await saveCheckedReadings(reportPath, inspected, {
             version: engineVersion,
             speaker: synth.voice.speaker,
             name: synth.voice.name,
         });
         log(`確かめた読みを保存しました(render はこの読みと照らし合わせます): ${saved}`);
+        return {
+            status: "checked",
+            engine: engineVersion,
+            speaker: { id: synth.voice.speaker, name: synth.voice.name },
+            review: inspected.filter((sentence) => sentence.reasons.length > 0).length,
+            sentences: inspected.map(({ at, text, sent, reading, reasons }) => ({ at, text, sent, reading, review: reasons.length > 0, reasons })),
+            savedTo: saved,
+        };
     }
     catch (error) {
-        readingError = error.message;
-        lines.push("", `読み: 確かめられませんでした(${readingError})`);
+        return { status: "failed", error: error.message };
     }
-    process.stdout.write(`${lines.join("\n")}\n`);
-    if (readingError)
-        throw new Error(`読み上げ文の読みを確かめられませんでした。${readingError}`);
+}
+withSecondsOption(withVoiceOptions(withSessionOptions(program
+    .command("check")
+    .description("台本を確かめる(形式、口調、長さ、読み上げにくい表記、数値との食い違い、全文の読み)。確かめた読みは render が照らし合わせる。描画はしない")
+    .argument("<report>", "台本(report.json)、script.json、または会話の要約のファイル(kind: conversation)のパス"))))
+    .option("--json", "結果を JSON で出す(読みの確認の結果を、プログラムや AI が読みやすい形で出す)")
+    .action(async (reportPath, flags) => {
+    const persona = await choosePersona(flags);
+    let output;
+    let status;
+    if (await isConversationInput(reportPath)) {
+        const conversation = await loadConversation(reportPath);
+        const result = checkConversationScript(conversation.raw, { persona, seconds: flags.seconds });
+        const resolved = await resolveReadings(conversation.raw, conversation.readings);
+        status = "会話の要約";
+        output = {
+            kind: "conversation",
+            file: path.resolve(reportPath),
+            title: conversation.script.title,
+            narration: { sentences: result.sentences, chars: result.narrationChars, budget: result.budget, seconds: flags.seconds },
+            persona: persona?.name ?? null,
+            issues: [...result.issues, ...readingIssues(resolved)],
+            readings: await checkReadings(reportPath, conversationSpeechUnits(conversation.raw), resolved.readings, flags),
+        };
+    }
+    else {
+        const report = await loadReport(reportPath);
+        let facts = report.facts;
+        let compared = "script.json に記録された数値と照合";
+        if (!facts) {
+            try {
+                const loaded = await loadSession(locateOptions(flags), [path.dirname(path.resolve(reportPath))]);
+                facts = loaded.facts;
+                compared = `セッション ${loaded.sessionId.slice(0, 8)} のログ(${FOUND_BY[loaded.how]})と照合`;
+            }
+            catch (error) {
+                compared = `省略(${error.message})`;
+            }
+        }
+        const result = checkScript(report.raw, { persona, facts, seconds: flags.seconds });
+        const resolved = await resolveReadings(report.raw, report.readings);
+        status = STATUS_LABELS[report.script.status];
+        output = {
+            kind: "report",
+            file: path.resolve(reportPath),
+            title: report.script.title,
+            narration: { sentences: result.sentences, chars: result.narrationChars, budget: result.budget, seconds: flags.seconds },
+            persona: persona?.name ?? null,
+            facts: compared,
+            issues: [...result.issues, ...readingIssues(resolved)],
+            readings: await checkReadings(reportPath, speechUnits(report.raw), resolved.readings, flags),
+        };
+    }
+    process.stdout.write(flags.json ? `${JSON.stringify(output, null, 2)}\n` : checkText(output, status));
+    if (output.readings.status === "failed")
+        throw new Error(`読み上げ文の読みを確かめられませんでした。${output.readings.error}`);
 });
 withSfxOptions(withBgmOptions(withVideoDirOption(withCreditOption(withRenderOptions(withSecondsOption(withVoiceOptions(withSessionOptions(program
     .command("render")
     .description("台本から動画を作る。画面の数値はセッションログから集計する")
-    .argument("<report>", "台本(report.json)、または描画済みの script.json(記録された数値で描画し直す)")))))))))
+    .argument("<report>", "台本(report.json)、描画済みの script.json(記録された数値で描画し直す)、または会話の要約のファイル(kind: conversation)")))))))))
     .option("-o, --out <file>", "動画の出力先。作業ファイルも同じ場所に置き、--video-dir より優先する(既定: 台本と同じ場所の summary.mp4)")
     .option("--timezone <tz>", "時刻表示のタイムゾーン(例: Asia/Tokyo)。省略時は実行環境の設定")
+    .option("--work-dir <dir>", "作業ファイル(narration.wav・audio.wav・timeline.json・script.json)を置くフォルダ。-o と組み合わせ、出力先に動画だけを置くのに使う")
     .action(async (reportPath, flags) => {
+    if (await isConversationInput(reportPath)) {
+        await renderConversationCommand(reportPath, flags);
+        return;
+    }
     const report = await loadReport(reportPath);
     let facts = report.facts;
     if (facts) {
@@ -331,6 +382,7 @@ withSfxOptions(withBgmOptions(withVideoDirOption(withCreditOption(withRenderOpti
         title: report.script.title,
         out: flags.out,
         videoDir: flags.videoDir,
+        workDir: flags.workDir,
     });
     await mkdir(workDir, { recursive: true });
     await mkdir(path.dirname(outFile), { recursive: true });
@@ -363,6 +415,62 @@ withSfxOptions(withBgmOptions(withVideoDirOption(withCreditOption(withRenderOpti
         log(`BGM のクレジット: ${bgm.credit}`);
     process.stdout.write(`${result.outFile}\n`);
 });
+/** 会話の要約を描画する。数値はファイルの facts を使い、BGM と効果音は付けない */
+async function renderConversationCommand(reportPath, flags) {
+    const conversation = await loadConversation(reportPath);
+    log("数値: ファイルの facts を使います");
+    if (resolveBgm(flags) || resolveSfx(flags))
+        log("BGM・効果音: 会話の要約では使いません(指定は無視します)");
+    const resolved = await resolveReadings(conversation.raw, conversation.readings);
+    // 読み上げありで VOICEVOX に接続できなければ、ここで止める(字幕のみには切り替えない)
+    const synth = await createSynthesizer({ ...flags, readings: resolved.readings, startCommand: engineStart.command, onStart: engineStart.onStart });
+    if (!flags.voice)
+        log("読み上げ: なし(字幕のみ。動画の柱に「音声なし」と表示します)");
+    if (synth instanceof VoicevoxSynthesizer) {
+        // check で確かめた読みと一致しなければ、音声を作る前に止める
+        const count = await verifyUnits(reportPath, conversationSpeechUnits(conversation.raw), synth);
+        log(`読み: check で確かめた読みと一致(${count} 文)`);
+    }
+    const persona = await choosePersona(flags);
+    log(`口調: ${persona?.name ?? "丁寧語"}`);
+    for (const issue of [...checkConversationScript(conversation.raw, { persona, seconds: flags.seconds }).issues, ...readingIssues(resolved)]) {
+        log(`注意: ${issue.at}: ${issue.message}`);
+    }
+    const mismatch = flags.voice ? personaMismatch(conversation.persona, flags.speaker) : undefined;
+    if (mismatch)
+        log(`注意: ${mismatch}`);
+    const { outFile, workDir } = resolveRenderPaths({
+        report: reportPath,
+        title: conversation.script.title,
+        out: flags.out,
+        videoDir: flags.videoDir,
+        workDir: flags.workDir,
+    });
+    await mkdir(workDir, { recursive: true });
+    await mkdir(path.dirname(outFile), { recursive: true });
+    const result = await renderConversation({
+        raw: conversation.raw,
+        facts: conversation.facts,
+        persona: persona ? { id: persona.id, name: persona.name } : conversation.persona,
+        readings: resolved.readings,
+    }, {
+        outFile,
+        workDir,
+        synth,
+        speed: flags.speed,
+        maxSpeed: MAX_SPEED,
+        maxSeconds: flags.seconds * LENGTH_TOLERANCE,
+        fps: flags.fps,
+        chromiumPath: flags.chromium,
+        timeZone: flags.timezone,
+        onSpeechProgress: progress(flags.voice ? "音声合成" : "字幕の時間割り当て"),
+        onFrameProgress: progress("描画"),
+    });
+    log(`完了: ${result.outFile}(${result.duration.toFixed(1)} 秒、話速 ${result.speed}、撮影 ${result.stats.captured}/${result.stats.frames} フレーム)`);
+    if (result.credit)
+        log(`クレジット表記: ${result.credit}(VOICEVOX の利用規約により必要です)`);
+    process.stdout.write(`${result.outFile}\n`);
+}
 withSessionOptions(program.command("digest").description("セッションログを時系列のダイジェストにする(作業の振り返り用)"))
     .option("-o, --out <file>", "書き出し先(省略時は標準出力)")
     .option("--max-digest-chars <n>", "ダイジェストの最大文字数。超える場合はツールの出力から順に削る", positiveInteger, DEFAULT_MAX_DIGEST_CHARS)
