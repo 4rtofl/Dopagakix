@@ -189,3 +189,46 @@ describe("CLI: BGM", () => {
     expect(bad.stderr).toMatch(/dB の数値を指定してください/);
   });
 });
+
+describe("CLI: 効果音", () => {
+  let dir: string;
+  beforeAll(async () => {
+    dir = await mkdtemp(path.join(os.tmpdir(), "dopagakix-cli-sfx-"));
+  });
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("render は効果音のディレクトリが無ければ、音声合成と描画の前に分かりやすいエラーで止まる", async () => {
+    const out = path.join(dir, "render", "summary.mp4");
+    const missing = path.join(dir, "no-such-sfx");
+    const result = await run(["render", example, "--sfx-dir", missing, "-o", out]);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain(`エラー: 効果音のディレクトリが見つかりません: ${missing}`);
+    // VOICEVOX への接続より前に止まる
+    expect(result.stderr).not.toContain("VOICEVOX");
+    expect(existsSync(out)).toBe(false);
+    // 環境変数で指定しても同じ。--no-sfx なら効果音なしで進む(この環境では VOICEVOX で止まる)
+    expect((await run(["render", example, "-o", out], { DOPAGAKIX_SFX_DIR: missing })).stderr).toContain("効果音のディレクトリが見つかりません");
+    expect((await run(["render", example, "--no-sfx", "-o", out], { DOPAGAKIX_SFX_DIR: missing })).stderr).toMatch(/VOICEVOX エンジン.*に接続できません/);
+  });
+
+  it("prepare は効果音の状態を「環境」に出し、指定を render のコマンドに引き継ぐ", async () => {
+    const missing = path.join(dir, "no-such-sfx");
+    const result = await run([
+      "prepare",
+      "--transcript",
+      transcript,
+      "--out-dir",
+      path.join(dir, "out"),
+      "--sfx-dir",
+      missing,
+      "--sfx-volume",
+      "-6",
+      "--sfx-credit",
+      "効果音：効果音ラボ",
+    ]);
+    expect(result.stdout).toContain(`- 効果音: [不足] 効果音のディレクトリが見つかりません: ${missing}`);
+    expect(result.stdout).toMatch(/3\. 描画する: dopagakix render .* --sfx-dir \S+no-such-sfx --sfx-credit '効果音：効果音ラボ' --sfx-volume=-6/);
+  });
+});

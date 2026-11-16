@@ -111,8 +111,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends ffmpeg
           npx playwright-core install --with-deps --only-shell chromium
       - name: 実エンジンを使うテスト
-        # BGM 付きの動画で、読み上げ中に BGM が下がることも確かめる(test/bgm.test.ts)
-        run: npx vitest run test/tts.test.ts test/readings.test.ts test/cli.test.ts test/environment.test.ts test/bgm.test.ts
+        # BGM 付き・効果音付きの動画で、読み上げ中に BGM が下がること、効果音が決めた時刻に鳴り読み上げと重ならないことも確かめる
+        run: npx vitest run test/tts.test.ts test/readings.test.ts test/cli.test.ts test/environment.test.ts test/bgm.test.ts test/sfx.test.ts
       - name: 読み上げ付きの動画を作る
         run: |
           out="$RUNNER_TEMP/voiced/summary.mp4"
@@ -145,6 +145,22 @@ jobs:
           ./.github/scripts/check-loudness.sh "$RUNNER_TEMP/voiced-bgm/audio.wav" -1.5
           ./.github/scripts/check-loudness.sh "$out" -1
           grep -q '"credit": "BGM: 60 Hz の合成音"' "$RUNNER_TEMP/voiced-bgm/script.json"
+      - name: 効果音付きの動画を作る
+        run: |
+          # 効果音ラボの音源は使わず、ffmpeg で作った合成音(2 kHz の正弦波、0.2 秒)を効果音にする
+          sfx="$RUNNER_TEMP/sfx"
+          mkdir -p "$sfx"
+          for kind in page result end; do
+            ffmpeg -hide_banner -loglevel error -f lavfi -i sine=frequency=2000:duration=0.2 "$sfx/$kind.wav"
+          done
+          out="$RUNNER_TEMP/voiced-sfx/summary.mp4"
+          mkdir -p "$RUNNER_TEMP/voiced-sfx"
+          cp examples/script.example.json "$RUNNER_TEMP/voiced-sfx/script.json"
+          node dist/cli.js check "$RUNNER_TEMP/voiced-sfx/script.json"
+          node dist/cli.js render "$RUNNER_TEMP/voiced-sfx/script.json" --fps 4 --sfx-dir "$sfx" --sfx-credit "効果音: 2 kHz の合成音" -o "$out"
+          ./.github/scripts/check-loudness.sh "$RUNNER_TEMP/voiced-sfx/audio.wav" -1.5
+          ./.github/scripts/check-loudness.sh "$out" -1
+          grep -q '"credit": "効果音: 2 kHz の合成音"' "$RUNNER_TEMP/voiced-sfx/script.json"
       - name: 作った動画を保存する
         if: always()
         uses: actions/upload-artifact@v7
@@ -159,6 +175,14 @@ jobs:
         with:
           name: voiced-bgm-sample
           path: ${{ runner.temp }}/voiced-bgm/summary.mp4
+          retention-days: 7
+          if-no-files-found: ignore
+      - name: 効果音付きの動画を保存する
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: voiced-sfx-sample
+          path: ${{ runner.temp }}/voiced-sfx/summary.mp4
           retention-days: 7
           if-no-files-found: ignore
       - name: エンジンのログ

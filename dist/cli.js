@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { Command, InvalidArgumentError, Option } from "commander";
 import { describeBgm, parseVolume, probeBgm, resolveBgm } from "./audio/bgm.js";
+import { describeSfx, probeSfx, resolveSfx } from "./audio/sfx.js";
 import { buildBrief, checkEnvironment } from "./brief.js";
 import { personaMismatch, resolvePersona } from "./persona.js";
 import { assertVoiceAllowed, createSynthesizer, DEFAULT_OUT_DIR, digestSession, inspectReadings, loadReport, loadSession, prepareOutputRoot, renderReport, resolveRenderPaths, saveCheckedReadings, verifyReadings, } from "./pipeline.js";
@@ -83,6 +84,14 @@ function withBgmOptions(command) {
         .option("--bgm-credit <text>", "BGM のクレジット。最終ページにそのまま表示する(例: 音楽：魔王魂)。環境変数 DOPAGAKIX_BGM_CREDIT でも可")
         .option("--bgm-volume <dB>", "BGM の音量。基準(-30 LUFS)からの増減。環境変数 DOPAGAKIX_BGM_VOLUME でも可(既定: 0)", volume);
 }
+/** 効果音の設定。環境変数と script.json の記録は resolveSfx で扱う(優先順位: オプション > 環境変数 > script.json) */
+function withSfxOptions(command) {
+    return command
+        .option("--sfx-dir <dir>", "効果音のファイル(page.* / result.* / end.*)を置いたディレクトリ。環境変数 DOPAGAKIX_SFX_DIR でも可。音源は同梱しないので、利用者が用意する")
+        .option("--no-sfx", "効果音を付けない(環境変数や script.json で設定していても)")
+        .option("--sfx-credit <text>", "効果音のクレジット。最終ページにそのまま表示する(例: 効果音：効果音ラボ)。環境変数 DOPAGAKIX_SFX_CREDIT でも可")
+        .option("--sfx-volume <dB>", "効果音の音量。基準(ピーク -12 dBFS)からの増減。環境変数 DOPAGAKIX_SFX_VOLUME でも可(既定: 0)", volume);
+}
 function withSecondsOption(command) {
     return command.option("--seconds <n>", "動画の長さの目安(秒)。読み上げ文の文字数の目安と、話速の調整に使う", positiveNumber, DEFAULT_SECONDS);
 }
@@ -152,9 +161,9 @@ const program = new Command()
     .description("AI エージェントが書いた作業報告の台本から、指示者向けの縦型動画を作る")
     .version(version)
     .hook("preAction", (_program, action) => assertVoiceAllowed(action.opts().voice));
-withBgmOptions(withVideoDirOption(withCreditOption(withSecondsOption(withVoiceOptions(withSessionOptions(program
+withSfxOptions(withBgmOptions(withVideoDirOption(withCreditOption(withSecondsOption(withVoiceOptions(withSessionOptions(program
     .command("prepare")
-    .description("動画レポートの準備。出力先を作り、台本を書くのに必要な情報(画面に出る数値・口調・長さ・環境)を表示する")))))))
+    .description("動画レポートの準備。出力先を作り、台本を書くのに必要な情報(画面に出る数値・口調・長さ・環境)を表示する"))))))))
     .option("--out-dir <dir>", "出力先の親ディレクトリ(中身は git の管理対象から外す)", DEFAULT_OUT_DIR)
     .option("--timezone <tz>", "時刻表示のタイムゾーン(例: Asia/Tokyo)。省略時は実行環境の設定")
     .option("--chromium <path>", "描画に使う Chromium の実行ファイル")
@@ -166,6 +175,7 @@ withBgmOptions(withVideoDirOption(withCreditOption(withSecondsOption(withVoiceOp
     const environment = await checkEnvironment({
         ...flags,
         bgm: resolveBgm(flags),
+        sfx: resolveSfx(flags),
         startCommand: engineStart.command,
         onStart: engineStart.onStart,
     });
@@ -188,7 +198,7 @@ withBgmOptions(withVideoDirOption(withCreditOption(withSecondsOption(withVoiceOp
             report,
             ...shared,
             ...timezone,
-            ...explicitArgs(command, flags, ["credit", "chromium", "videoDir", "bgm", "bgmCredit", "bgmVolume"]),
+            ...explicitArgs(command, flags, ["credit", "chromium", "videoDir", "bgm", "bgmCredit", "bgmVolume", "sfx", "sfxDir", "sfxCredit", "sfxVolume"]),
         ]),
         digestCommand: commandLine(["dopagakix", "digest", ...session, ...timezone, "-o", displayPath(path.join(runDir, "digest.md"))]),
         persona,
@@ -268,10 +278,10 @@ withSecondsOption(withVoiceOptions(withSessionOptions(program
     if (readingError)
         throw new Error(`読み上げ文の読みを確かめられませんでした。${readingError}`);
 });
-withBgmOptions(withVideoDirOption(withCreditOption(withRenderOptions(withSecondsOption(withVoiceOptions(withSessionOptions(program
+withSfxOptions(withBgmOptions(withVideoDirOption(withCreditOption(withRenderOptions(withSecondsOption(withVoiceOptions(withSessionOptions(program
     .command("render")
     .description("台本から動画を作る。画面の数値はセッションログから集計する")
-    .argument("<report>", "台本(report.json)、または描画済みの script.json(記録された数値で描画し直す)"))))))))
+    .argument("<report>", "台本(report.json)、または描画済みの script.json(記録された数値で描画し直す)")))))))))
     .option("-o, --out <file>", "動画の出力先。作業ファイルも同じ場所に置き、--video-dir より優先する(既定: 台本と同じ場所の summary.mp4)")
     .option("--timezone <tz>", "時刻表示のタイムゾーン(例: Asia/Tokyo)。省略時は実行環境の設定")
     .action(async (reportPath, flags) => {
@@ -289,6 +299,10 @@ withBgmOptions(withVideoDirOption(withCreditOption(withRenderOptions(withSeconds
     const bgmSetting = resolveBgm(flags, process.env, report.bgm);
     const bgm = bgmSetting ? await probeBgm(bgmSetting) : undefined;
     log(`BGM: ${bgm ? describeBgm(bgm) : "なし"}`);
+    // 効果音のファイルが無い・読めない場合も、同じく音声合成と描画の前に止める
+    const sfxSetting = resolveSfx(flags, process.env, report.sfx);
+    const sfx = sfxSetting ? await probeSfx(sfxSetting) : undefined;
+    log(`効果音: ${sfx ? describeSfx(sfx) : "なし"}`);
     const resolved = await resolveReadings(report.raw, report.readings);
     // 読み上げありで VOICEVOX に接続できなければ、ここで止める(字幕のみには切り替えない)
     const synth = await createSynthesizer({
@@ -326,6 +340,7 @@ withBgmOptions(withVideoDirOption(withCreditOption(withRenderOptions(withSeconds
         author: report.author,
         persona: persona ? { id: persona.id, name: persona.name } : report.persona,
         bgm,
+        sfx,
         readings: resolved.readings,
     }, {
         outFile,

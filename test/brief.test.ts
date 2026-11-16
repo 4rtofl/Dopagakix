@@ -118,7 +118,7 @@ describe("checkEnvironment", () => {
   it("指定した Chromium が無ければ不足として扱う", async () => {
     const items = await checkEnvironment({ ...base, voice: false, speaker: 3 });
     expect(items.find((item) => item.name === "Chromium")).toMatchObject({ status: "missing" });
-    expect(items.map((item) => item.name)).toEqual(["読み上げ", "Chromium", "ffmpeg", "BGM"]);
+    expect(items.map((item) => item.name)).toEqual(["読み上げ", "Chromium", "ffmpeg", "BGM", "効果音"]);
   });
 
   it("BGM を設定していなければ「なし」、曲ファイルが無ければ不足として扱う", async () => {
@@ -128,6 +128,16 @@ describe("checkEnvironment", () => {
     expect(missing.find((item) => item.name === "BGM")).toMatchObject({
       status: "missing",
       detail: expect.stringMatching(/曲ファイルが見つかりません: \/nonexistent\/song\.mp3/),
+    });
+  });
+
+  it("効果音を設定していなければ「なし」、ディレクトリが無ければ不足として扱う", async () => {
+    const none = await checkEnvironment({ ...base, voice: false, speaker: 3 });
+    expect(none.find((item) => item.name === "効果音")).toEqual({ name: "効果音", status: "ok", detail: "なし" });
+    const missing = await checkEnvironment({ ...base, voice: false, speaker: 3, sfx: { dir: "/nonexistent/sfx", volume: 0 } });
+    expect(missing.find((item) => item.name === "効果音")).toMatchObject({
+      status: "missing",
+      detail: expect.stringMatching(/効果音のディレクトリが見つかりません: \/nonexistent\/sfx/),
     });
   });
 });

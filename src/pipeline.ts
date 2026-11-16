@@ -4,6 +4,7 @@ import path from "node:path";
 import { z } from "zod";
 import { type BgmSetting, type BgmTrack, bgmGain, bgmLayer } from "./audio/bgm.js";
 import { finishAudio } from "./audio/finish.js";
+import { type SfxSet, type SfxSetting, sfxCues, sfxGain, sfxLayers } from "./audio/sfx.js";
 import type { SessionFacts } from "./facts.js";
 import { isOutputPath } from "./output.js";
 import { redactSecrets } from "./redact.js";
@@ -105,6 +106,8 @@ export interface LoadedReport {
   readings?: Readings;
   /** script.json に記録された BGM の設定 */
   bgm?: BgmSetting;
+  /** script.json に記録された効果音の設定 */
+  sfx?: SfxSetting;
 }
 
 function formatError(file: string, error: z.ZodError): Error {
@@ -125,8 +128,8 @@ export async function loadReport(file: string): Promise<LoadedReport> {
   if (json !== null && typeof json === "object" && "version" in json) {
     const parsed = ScriptFileSchema.safeParse(json);
     if (!parsed.success) throw formatError(file, parsed.error);
-    const { script, author, facts, persona, readings, bgm } = parsed.data;
-    return { raw: script, script: normalizeScript(script), author, facts, persona, readings, bgm };
+    const { script, author, facts, persona, readings, bgm, sfx } = parsed.data;
+    return { raw: script, script: normalizeScript(script), author, facts, persona, readings, bgm, sfx };
   }
   const parsed = VideoScriptSchema.safeParse(json);
   if (!parsed.success) throw formatError(file, parsed.error);
@@ -276,6 +279,8 @@ export interface RenderInput {
   readings?: Readings;
   /** BGM(probeBgm で確かめたもの)。なければ BGM なし */
   bgm?: BgmTrack;
+  /** 効果音(probeSfx で確かめたもの)。なければ効果音なし */
+  sfx?: SfxSet;
 }
 
 export interface RenderPipelineOptions {
@@ -299,7 +304,7 @@ export interface RenderResult {
   outFile: string;
   /** 描画に使った台本と事実情報の記録 */
   scriptFile: string;
-  /** 仕上げた音声(BGM を混ぜ、音量をそろえたもの) */
+  /** 仕上げた音声(BGM と効果音を混ぜ、音量をそろえたもの) */
   audioFile: string;
   duration: number;
   speed: number;
@@ -315,6 +320,11 @@ function bgmRecord(bgm: BgmTrack): BgmSetting {
   return { file: bgm.file, ...(bgm.credit ? { credit: bgm.credit } : {}), volume: bgm.volume };
 }
 
+/** script.json と timeline.json に記録する効果音の設定 */
+function sfxRecord(sfx: SfxSet): SfxSetting {
+  return { dir: sfx.dir, ...(sfx.credit ? { credit: sfx.credit } : {}), volume: sfx.volume };
+}
+
 /** 台本から音声と映像を作り、mp4 に書き出す。 */
 export async function renderReport(input: RenderInput, options: RenderPipelineOptions): Promise<RenderResult> {
   const { voice } = options.synth;
@@ -326,6 +336,7 @@ export async function renderReport(input: RenderInput, options: RenderPipelineOp
     voice: voice ? { enabled: true, ...voice } : { enabled: false },
     ...(input.readings ? { readings: input.readings } : {}),
     ...(input.bgm ? { bgm: bgmRecord(input.bgm) } : {}),
+    ...(input.sfx ? { sfx: sfxRecord(input.sfx) } : {}),
     facts: input.facts,
     script: input.script,
   };
@@ -349,14 +360,25 @@ export async function renderReport(input: RenderInput, options: RenderPipelineOp
   }
   const narrationFile = path.join(options.workDir, "narration.wav");
   await writeFile(narrationFile, encodeWav(timeline.audio));
-  // 音声の仕上げ: BGM を混ぜ、動画ごとの音量をそろえる(BGM がなくても同じ処理をかける)
+  // 音声の仕上げ: BGM と効果音を混ぜ、動画ごとの音量をそろえる(どちらもなくても同じ処理をかける)
+  const cues = input.sfx ? sfxCues(timeline.scenes, input.script) : [];
   const audio = await finishAudio({
     narrationFile,
-    layers: input.bgm ? [bgmLayer(input.bgm, timeline.duration)] : [],
+    layers: [...(input.bgm ? [bgmLayer(input.bgm, timeline.duration)] : []), ...(input.sfx ? sfxLayers(input.sfx, cues) : [])],
     outFile: path.join(options.workDir, "audio.wav"),
   });
   const bgm = input.bgm
     ? { ...bgmRecord(input.bgm), loudness: input.bgm.loudness, gain: Math.round(bgmGain(input.bgm) * 100) / 100 }
+    : null;
+  const sfx = input.sfx
+    ? {
+        ...sfxRecord(input.sfx),
+        sounds: input.sfx.sounds.map((sound) => ({
+          ...sound,
+          gain: Math.round(sfxGain(sound, input.sfx!.volume) * 100) / 100,
+        })),
+        cues,
+      }
     : null;
   const loudness = {
     input: audio.inputLoudness,
@@ -367,7 +389,7 @@ export async function renderReport(input: RenderInput, options: RenderPipelineOp
   await writeFile(
     path.join(options.workDir, "timeline.json"),
     `${JSON.stringify(
-      { duration: timeline.duration, speed: timeline.speed, credit: timeline.credit, bgm, loudness, scenes: timeline.scenes },
+      { duration: timeline.duration, speed: timeline.speed, credit: timeline.credit, bgm, sfx, loudness, scenes: timeline.scenes },
       (_key, value: unknown) => (typeof value === "number" && !Number.isFinite(value) ? null : value),
       2,
     )}\n`,
@@ -379,6 +401,7 @@ export async function renderReport(input: RenderInput, options: RenderPipelineOp
     scenes: timeline.scenes,
     credit: timeline.credit,
     bgmCredit: input.bgm?.credit,
+    sfxCredit: input.sfx?.credit,
     silent: !voice,
     author: input.author,
     timeZone: options.timeZone,

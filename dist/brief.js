@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { describeBgm, probeBgm } from "./audio/bgm.js";
+import { describeSfx, probeSfx } from "./audio/sfx.js";
 import { narrationBudget, SENTENCE_LIMIT } from "./script/check.js";
 import { FIGURE_LIMITS as F } from "./script/schema.js";
 import { withVoicevoxStart } from "./tts/start.js";
@@ -51,7 +52,19 @@ export async function checkEnvironment(options) {
         ? { name: "ffmpeg", status: "ok", detail: probe.stdout.split("\n")[0].trim() }
         : { name: "ffmpeg", status: "missing", detail: `${ffmpeg} を実行できません。ffmpeg をインストールしてください` });
     items.push(await bgmItem(options.bgm));
+    items.push(await sfxItem(options.sfx));
     return items;
+}
+/** 効果音の状態。設定したディレクトリやファイルが無い・読めない場合は、描画できないので不足とする */
+async function sfxItem(sfx) {
+    if (!sfx)
+        return { name: "効果音", status: "ok", detail: "なし" };
+    try {
+        return { name: "効果音", status: "ok", detail: describeSfx(await probeSfx(sfx)) };
+    }
+    catch (error) {
+        return { name: "効果音", status: "missing", detail: error.message.replaceAll("\n", " ") };
+    }
 }
 /** BGM の状態。設定した曲ファイルが無い・読めない場合は、描画できないので不足とする */
 async function bgmItem(bgm) {

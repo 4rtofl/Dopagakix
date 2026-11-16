@@ -4,6 +4,7 @@ import path from "node:path";
 import { z } from "zod";
 import { bgmGain, bgmLayer } from "./audio/bgm.js";
 import { finishAudio } from "./audio/finish.js";
+import { sfxCues, sfxGain, sfxLayers } from "./audio/sfx.js";
 import { isOutputPath } from "./output.js";
 import { redactSecrets } from "./redact.js";
 import { normalizeScript } from "./script/normalize.js";
@@ -74,8 +75,8 @@ export async function loadReport(file) {
         const parsed = ScriptFileSchema.safeParse(json);
         if (!parsed.success)
             throw formatError(file, parsed.error);
-        const { script, author, facts, persona, readings, bgm } = parsed.data;
-        return { raw: script, script: normalizeScript(script), author, facts, persona, readings, bgm };
+        const { script, author, facts, persona, readings, bgm, sfx } = parsed.data;
+        return { raw: script, script: normalizeScript(script), author, facts, persona, readings, bgm, sfx };
     }
     const parsed = VideoScriptSchema.safeParse(json);
     if (!parsed.success)
@@ -178,6 +179,10 @@ export const SILENT_DBFS = -40;
 function bgmRecord(bgm) {
     return { file: bgm.file, ...(bgm.credit ? { credit: bgm.credit } : {}), volume: bgm.volume };
 }
+/** script.json と timeline.json に記録する効果音の設定 */
+function sfxRecord(sfx) {
+    return { dir: sfx.dir, ...(sfx.credit ? { credit: sfx.credit } : {}), volume: sfx.volume };
+}
 /** 台本から音声と映像を作り、mp4 に書き出す。 */
 export async function renderReport(input, options) {
     const { voice } = options.synth;
@@ -189,6 +194,7 @@ export async function renderReport(input, options) {
         voice: voice ? { enabled: true, ...voice } : { enabled: false },
         ...(input.readings ? { readings: input.readings } : {}),
         ...(input.bgm ? { bgm: bgmRecord(input.bgm) } : {}),
+        ...(input.sfx ? { sfx: sfxRecord(input.sfx) } : {}),
         facts: input.facts,
         script: input.script,
     };
@@ -209,14 +215,25 @@ export async function renderReport(input, options) {
     }
     const narrationFile = path.join(options.workDir, "narration.wav");
     await writeFile(narrationFile, encodeWav(timeline.audio));
-    // 音声の仕上げ: BGM を混ぜ、動画ごとの音量をそろえる(BGM がなくても同じ処理をかける)
+    // 音声の仕上げ: BGM と効果音を混ぜ、動画ごとの音量をそろえる(どちらもなくても同じ処理をかける)
+    const cues = input.sfx ? sfxCues(timeline.scenes, input.script) : [];
     const audio = await finishAudio({
         narrationFile,
-        layers: input.bgm ? [bgmLayer(input.bgm, timeline.duration)] : [],
+        layers: [...(input.bgm ? [bgmLayer(input.bgm, timeline.duration)] : []), ...(input.sfx ? sfxLayers(input.sfx, cues) : [])],
         outFile: path.join(options.workDir, "audio.wav"),
     });
     const bgm = input.bgm
         ? { ...bgmRecord(input.bgm), loudness: input.bgm.loudness, gain: Math.round(bgmGain(input.bgm) * 100) / 100 }
+        : null;
+    const sfx = input.sfx
+        ? {
+            ...sfxRecord(input.sfx),
+            sounds: input.sfx.sounds.map((sound) => ({
+                ...sound,
+                gain: Math.round(sfxGain(sound, input.sfx.volume) * 100) / 100,
+            })),
+            cues,
+        }
         : null;
     const loudness = {
         input: audio.inputLoudness,
@@ -224,13 +241,14 @@ export async function renderReport(input, options) {
         truePeak: audio.outputTruePeak ?? null,
         normalization: audio.normalization,
     };
-    await writeFile(path.join(options.workDir, "timeline.json"), `${JSON.stringify({ duration: timeline.duration, speed: timeline.speed, credit: timeline.credit, bgm, loudness, scenes: timeline.scenes }, (_key, value) => (typeof value === "number" && !Number.isFinite(value) ? null : value), 2)}\n`);
+    await writeFile(path.join(options.workDir, "timeline.json"), `${JSON.stringify({ duration: timeline.duration, speed: timeline.speed, credit: timeline.credit, bgm, sfx, loudness, scenes: timeline.scenes }, (_key, value) => (typeof value === "number" && !Number.isFinite(value) ? null : value), 2)}\n`);
     const html = buildHtml({
         script: input.script,
         facts: input.facts,
         scenes: timeline.scenes,
         credit: timeline.credit,
         bgmCredit: input.bgm?.credit,
+        sfxCredit: input.sfx?.credit,
         silent: !voice,
         author: input.author,
         timeZone: options.timeZone,

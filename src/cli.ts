@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { Command, InvalidArgumentError, Option } from "commander";
 import { type BgmFlags, describeBgm, parseVolume, probeBgm, resolveBgm } from "./audio/bgm.js";
+import { describeSfx, probeSfx, resolveSfx, type SfxFlags } from "./audio/sfx.js";
 import { buildBrief, checkEnvironment } from "./brief.js";
 import { type Persona, personaMismatch, resolvePersona } from "./persona.js";
 import {
@@ -140,6 +141,18 @@ function withBgmOptions(command: Command): Command {
     .option("--bgm-volume <dB>", "BGM の音量。基準(-30 LUFS)からの増減。環境変数 DOPAGAKIX_BGM_VOLUME でも可(既定: 0)", volume);
 }
 
+/** 効果音の設定。環境変数と script.json の記録は resolveSfx で扱う(優先順位: オプション > 環境変数 > script.json) */
+function withSfxOptions(command: Command): Command {
+  return command
+    .option(
+      "--sfx-dir <dir>",
+      "効果音のファイル(page.* / result.* / end.*)を置いたディレクトリ。環境変数 DOPAGAKIX_SFX_DIR でも可。音源は同梱しないので、利用者が用意する",
+    )
+    .option("--no-sfx", "効果音を付けない(環境変数や script.json で設定していても)")
+    .option("--sfx-credit <text>", "効果音のクレジット。最終ページにそのまま表示する(例: 効果音：効果音ラボ)。環境変数 DOPAGAKIX_SFX_CREDIT でも可")
+    .option("--sfx-volume <dB>", "効果音の音量。基準(ピーク -12 dBFS)からの増減。環境変数 DOPAGAKIX_SFX_VOLUME でも可(既定: 0)", volume);
+}
+
 function withSecondsOption(command: Command): Command {
   return command.option("--seconds <n>", "動画の長さの目安(秒)。読み上げ文の文字数の目安と、話速の調整に使う", positiveNumber, DEFAULT_SECONDS);
 }
@@ -220,17 +233,20 @@ const program = new Command()
 
 type PrepareFlags = SessionFlags &
   VoiceFlags &
-  BgmFlags & { credit?: string; videoDir?: string; seconds: number; outDir: string; timezone?: string; chromium?: string };
+  BgmFlags &
+  SfxFlags & { credit?: string; videoDir?: string; seconds: number; outDir: string; timezone?: string; chromium?: string };
 
-withBgmOptions(
-  withVideoDirOption(
-    withCreditOption(
-      withSecondsOption(
-        withVoiceOptions(
-          withSessionOptions(
-            program
-              .command("prepare")
-              .description("動画レポートの準備。出力先を作り、台本を書くのに必要な情報(画面に出る数値・口調・長さ・環境)を表示する"),
+withSfxOptions(
+  withBgmOptions(
+    withVideoDirOption(
+      withCreditOption(
+        withSecondsOption(
+          withVoiceOptions(
+            withSessionOptions(
+              program
+                .command("prepare")
+                .description("動画レポートの準備。出力先を作り、台本を書くのに必要な情報(画面に出る数値・口調・長さ・環境)を表示する"),
+            ),
           ),
         ),
       ),
@@ -248,6 +264,7 @@ withBgmOptions(
     const environment = await checkEnvironment({
       ...flags,
       bgm: resolveBgm(flags),
+      sfx: resolveSfx(flags),
       startCommand: engineStart.command,
       onStart: engineStart.onStart,
     });
@@ -273,7 +290,7 @@ withBgmOptions(
           report,
           ...shared,
           ...timezone,
-          ...explicitArgs(command, flags, ["credit", "chromium", "videoDir", "bgm", "bgmCredit", "bgmVolume"]),
+          ...explicitArgs(command, flags, ["credit", "chromium", "videoDir", "bgm", "bgmCredit", "bgmVolume", "sfx", "sfxDir", "sfxCredit", "sfxVolume"]),
         ]),
         digestCommand: commandLine(["dopagakix", "digest", ...session, ...timezone, "-o", displayPath(path.join(runDir, "digest.md"))]),
         persona,
@@ -371,19 +388,22 @@ withSecondsOption(
 type RenderCommandFlags = SessionFlags &
   VoiceFlags &
   RenderFlags &
-  BgmFlags & { credit?: string; out?: string; videoDir?: string; seconds: number; timezone?: string };
+  BgmFlags &
+  SfxFlags & { credit?: string; out?: string; videoDir?: string; seconds: number; timezone?: string };
 
-withBgmOptions(
-  withVideoDirOption(
-    withCreditOption(
-      withRenderOptions(
-        withSecondsOption(
-          withVoiceOptions(
-            withSessionOptions(
-              program
-                .command("render")
-                .description("台本から動画を作る。画面の数値はセッションログから集計する")
-                .argument("<report>", "台本(report.json)、または描画済みの script.json(記録された数値で描画し直す)"),
+withSfxOptions(
+  withBgmOptions(
+    withVideoDirOption(
+      withCreditOption(
+        withRenderOptions(
+          withSecondsOption(
+            withVoiceOptions(
+              withSessionOptions(
+                program
+                  .command("render")
+                  .description("台本から動画を作る。画面の数値はセッションログから集計する")
+                  .argument("<report>", "台本(report.json)、または描画済みの script.json(記録された数値で描画し直す)"),
+              ),
             ),
           ),
         ),
@@ -408,6 +428,10 @@ withBgmOptions(
     const bgmSetting = resolveBgm(flags, process.env, report.bgm);
     const bgm = bgmSetting ? await probeBgm(bgmSetting) : undefined;
     log(`BGM: ${bgm ? describeBgm(bgm) : "なし"}`);
+    // 効果音のファイルが無い・読めない場合も、同じく音声合成と描画の前に止める
+    const sfxSetting = resolveSfx(flags, process.env, report.sfx);
+    const sfx = sfxSetting ? await probeSfx(sfxSetting) : undefined;
+    log(`効果音: ${sfx ? describeSfx(sfx) : "なし"}`);
 
     const resolved = await resolveReadings(report.raw, report.readings);
     // 読み上げありで VOICEVOX に接続できなければ、ここで止める(字幕のみには切り替えない)
@@ -447,6 +471,7 @@ withBgmOptions(
         author: report.author,
         persona: persona ? { id: persona.id, name: persona.name } : report.persona,
         bgm,
+        sfx,
         readings: resolved.readings,
       },
       {

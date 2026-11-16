@@ -139,6 +139,8 @@ export const ScriptFileSchema = z.object({
   voice: z
     .object({ enabled: z.boolean(), speaker: z.number().int().optional(), name: z.string().optional(), style: z.string().optional() })
     .optional(),
+  /** 効果音の設定。描画し直すときも同じ効果音を使う(オプションや環境変数で指定すればそちらを優先) */
+  sfx: z.object({ dir: z.string(), credit: z.string().optional(), volume: z.number() }).optional(),
   /** 描画に使った読みの指定(組み込み・プロジェクト・台本を合わせた結果)。描画し直しても同じ読みにする */
   readings: VideoScriptSchema.shape.readings,
   /** BGM の設定。描画し直すときも同じ BGM を使う(オプションや環境変数で指定すればそちらを優先) */
