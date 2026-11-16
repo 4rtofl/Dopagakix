@@ -8,7 +8,7 @@ import type { SessionFacts } from "../src/facts.js";
 import { checkScript } from "../src/script/check.js";
 import { type Figure, VideoScriptSchema } from "../src/script/schema.js";
 import { SilentSynthesizer } from "../src/tts/silent.js";
-import { encodeWav } from "../src/tts/wav.js";
+import { encodeWav, silence } from "../src/tts/wav.js";
 import { renderVideo } from "../src/video/render.js";
 import { buildHtml, escapeHtml, shortenPath } from "../src/video/template.js";
 import { buildTimeline } from "../src/video/timeline.js";
@@ -175,16 +175,30 @@ describe.runIf(canRender)("renderVideo(結合テスト)", () => {
     const audioFile = path.join(dir, `${figure.type}.wav`);
     await writeFile(audioFile, encodeWav(timeline.audio));
     const html = buildHtml({ script, facts, scenes: timeline.scenes, author: "agent", timeZone: "UTC" });
+    const stats = await renderVideo(html, {
+      outFile: path.join(dir, `${figure.type}.mp4`),
+      audioFile,
+      duration: timeline.duration,
+      fps: 2,
+      scale: 0.25,
+    });
+    expect(stats.fitScales[index]).toBe(1);
 
+    // 図解シーンだけの動画を 2 回作り、復号した全フレームが一致することを確かめる
+    const scene = timeline.scenes[index]!;
+    const length = scene.end - scene.start;
+    const only = [{ ...scene, start: 0, end: length, cues: scene.cues.map((c) => ({ ...c, start: c.start - scene.start, end: c.end - scene.start })) }];
+    const sceneAudio = path.join(dir, `${figure.type}-scene.wav`);
+    await writeFile(sceneAudio, encodeWav(silence(length, 24_000)));
+    const sceneHtml = buildHtml({ script, facts, scenes: only, author: "agent", timeZone: "UTC" });
     const frames = async (name: string) => {
       const outFile = path.join(dir, name);
-      const stats = await renderVideo(html, { outFile, audioFile, duration: timeline.duration, fps: 4, scale: 0.25 });
-      const md5 = execFileSync("ffmpeg", ["-v", "error", "-i", outFile, "-map", "0:v:0", "-f", "framemd5", "-"], { encoding: "utf8" });
-      return { stats, md5 };
+      await renderVideo(sceneHtml, { outFile, audioFile: sceneAudio, duration: length, fps: 8, scale: 0.25 });
+      return execFileSync("ffmpeg", ["-v", "error", "-i", outFile, "-map", "0:v:0", "-f", "framemd5", "-"], { encoding: "utf8" });
     };
-    const first = await frames(`${figure.type}-1.mp4`);
-    expect(first.stats.fitScales[index]).toBe(1);
-    const second = await frames(`${figure.type}-2.mp4`);
-    expect(second.md5).toBe(first.md5);
+    const first = await frames(`${figure.type}-scene-1.mp4`);
+    // 要素が現れる途中のフレームを含む(同じフレームばかりではない)
+    expect(new Set(first.split("\n").filter((l) => /^0,/.test(l)).map((l) => l.split(",").at(-1))).size).toBeGreaterThan(3);
+    expect(await frames(`${figure.type}-scene-2.mp4`)).toBe(first);
   });
 });
