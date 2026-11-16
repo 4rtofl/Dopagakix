@@ -144,7 +144,7 @@ export interface SpeechUnit {
   text: string;
 }
 
-const NARRATION_KEYS = ["opening", "request", "work", "verification", "decisions", "next_steps"] as const;
+const NARRATION_KEYS = ["opening", "work", "verification", "decisions", "next_steps"] as const;
 
 /** 台本の読み上げ文を、描画のときに音声を作るのと同じ単位(表示用に整えた文を、字幕 1 枚ごとに分けたもの)にする */
 export function speechUnits(script: VideoScript): SpeechUnit[] {

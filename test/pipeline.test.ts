@@ -18,6 +18,8 @@ import { SilentSynthesizer } from "../src/tts/silent.js";
 import type { Synthesizer } from "../src/tts/types.js";
 import { VoicevoxSynthesizer } from "../src/tts/voicevox.js";
 import { encodeWav, silence } from "../src/tts/wav.js";
+import { probeBgm, resolveBgm } from "../src/audio/bgm.js";
+import { loudnessOf, makeSine } from "./audio.js";
 import { canRender } from "./support.js";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
@@ -51,6 +53,25 @@ describe("loadReport", () => {
     const report = await loadReport(example);
     expect(report.author).toBe("manual");
     expect(report.facts?.files).toHaveLength(2);
+  });
+
+  it("廃止した request(ご依頼の内容)を含む以前の台本と script.json も読み込み、表示用からは落とす", async () => {
+    const request = { summary: "ログイン画面の入力チェックを修正する", narration: ["ご依頼は入力チェックの修正でした。"] };
+    const script = { ...JSON.parse(await readFile(path.join(fixtures, "script.json"), "utf8")), request };
+    const reportFile = path.join(dir, "old-report.json");
+    await writeFile(reportFile, JSON.stringify(script));
+    const report = await loadReport(reportFile);
+    expect(report.raw.request).toEqual(request);
+    expect(report.script).not.toHaveProperty("request");
+
+    const record = JSON.parse(await readFile(example, "utf8"));
+    record.script.request = request;
+    const recordFile = path.join(dir, "old-script.json");
+    await writeFile(recordFile, JSON.stringify(record));
+    const again = await loadReport(recordFile);
+    expect(again.raw.request).toEqual(request);
+    expect(again.script).not.toHaveProperty("request");
+    expect(again.facts).toEqual(record.facts);
   });
 
   it("JSON の誤りと形式の誤りを、場所が分かるように伝える", async () => {
@@ -87,7 +108,8 @@ describe("excludeOutputs", () => {
 describe("createSynthesizer", () => {
   const engine = (async (input: URL | RequestInfo) => {
     const url = new URL(String(input));
-    if (url.pathname === "/speakers") return Response.json([{ name: "ずんだもん", speaker_uuid: "z", styles: [{ name: "ノーマル", id: 3 }] }]);
+    if (url.pathname === "/speakers")
+      return Response.json([{ name: "ずんだもん", speaker_uuid: "z", styles: [{ name: "ノーマル", id: 3 }] }]);
     if (url.pathname === "/initialize_speaker") return new Response(null, { status: 204 });
     return new Response(new Uint8Array(encodeWav(silence(0.1, 24_000))));
   }) as typeof fetch;
@@ -205,7 +227,12 @@ describe("resolveRenderPaths", () => {
 
 describe.runIf(canRender)("renderReport(結合テスト)", () => {
   it("動画と、描画し直すための script.json を書き出す", async () => {
-    const report = await loadReport(example);
+    // 廃止した request を含む以前の script.json でも描画できる(表示はしない)
+    const old = JSON.parse(await readFile(example, "utf8"));
+    old.script.request = { summary: "ログイン画面の入力チェックを修正する", narration: ["ご依頼は入力チェックの修正でした。"] };
+    const oldFile = path.join(dir, "old-example.json");
+    await writeFile(oldFile, JSON.stringify(old));
+    const report = await loadReport(oldFile);
     const workDir = path.join(dir, "render");
     await prepareOutputRoot(workDir);
     const result = await renderReport(
@@ -224,6 +251,9 @@ describe.runIf(canRender)("renderReport(結合テスト)", () => {
     );
     expect(existsSync(result.outFile)).toBe(true);
     expect(existsSync(path.join(workDir, "narration.wav"))).toBe(true);
+    expect(result.stats.fitScales).toHaveLength(5);
+    const timeline = JSON.parse(await readFile(path.join(workDir, "timeline.json"), "utf8")) as { scenes: Array<{ kind: string }> };
+    expect(timeline.scenes.map((scene) => scene.kind)).toEqual(["opening", "work", "verification", "decisions", "closing"]);
     const record = ScriptFileSchema.parse(JSON.parse(await readFile(result.scriptFile, "utf8")));
     expect(record).toMatchObject({ author: "agent", persona: { id: "zundamon" }, voice: { enabled: false }, facts: report.facts });
 
@@ -231,5 +261,40 @@ describe.runIf(canRender)("renderReport(結合テスト)", () => {
     const again = await loadReport(result.scriptFile);
     expect(again.facts).toEqual(report.facts);
     expect(again.author).toBe("agent");
+  });
+});
+
+describe.runIf(canRender)("renderReport(BGM の結合テスト)", () => {
+  it("BGM を混ぜ、script.json と timeline.json に記録し、script.json から同じ BGM・クレジットで描画し直せる", async () => {
+    const report = await loadReport(example);
+    const workDir = path.join(dir, "bgm");
+    await prepareOutputRoot(workDir);
+    const song = path.join(dir, "sine60.wav");
+    makeSine(song, { frequency: 60, seconds: 10 });
+    const bgm = await probeBgm(resolveBgm({ bgm: song, bgmCredit: "音楽：テスト", bgmVolume: -2 }, {})!);
+    const options = {
+      outFile: path.join(workDir, "summary.mp4"),
+      workDir,
+      synth: new SilentSynthesizer(),
+      speed: 1.25,
+      maxSpeed: 1.45,
+      maxSeconds: 120,
+      fps: 2,
+      scale: 0.25,
+    };
+    const result = await renderReport({ script: report.script, facts: report.facts!, author: "manual", bgm }, options);
+
+    const record = ScriptFileSchema.parse(JSON.parse(await readFile(result.scriptFile, "utf8")));
+    expect(record.bgm).toEqual({ file: song, credit: "音楽：テスト", volume: -2 });
+    const timeline = JSON.parse(await readFile(path.join(workDir, "timeline.json"), "utf8")) as Record<string, unknown>;
+    expect(timeline.bgm).toMatchObject({ file: song, credit: "音楽：テスト", volume: -2 });
+    // 字幕のみでも BGM があれば音量をそろえる
+    const measured = loudnessOf(result.outFile);
+    expect(Math.abs(measured.integrated + 16)).toBeLessThanOrEqual(1);
+
+    // 記録した script.json から、オプションも環境変数もなしで同じ BGM になる
+    const again = await loadReport(result.scriptFile);
+    expect(resolveBgm({}, {}, again.bgm)).toEqual({ file: song, credit: "音楽：テスト", volume: -2 });
+    expect(resolveBgm({ bgm: false }, {}, again.bgm)).toBeUndefined();
   });
 });

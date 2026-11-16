@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { type BgmSetting, describeBgm, probeBgm } from "./audio/bgm.js";
 import type { SessionFacts } from "./facts.js";
 import type { Persona } from "./persona.js";
 import { narrationBudget, SENTENCE_LIMIT } from "./script/check.js";
@@ -22,6 +23,8 @@ export interface EnvironmentOptions {
   /** クレジット表記の指定(省略時は話者から決める) */
   credit?: string;
   chromium?: string;
+  /** BGM の設定(なければ BGM なし) */
+  bgm?: BgmSetting;
   /** 接続できないときに実行するエンジンの起動コマンド(環境変数 DOPAGAKIX_VOICEVOX_START) */
   startCommand?: string;
   /** 起動コマンドを実行する直前に呼ぶ(応答を待つ間の表示用) */
@@ -75,7 +78,18 @@ export async function checkEnvironment(options: EnvironmentOptions): Promise<Env
       ? { name: "ffmpeg", status: "ok", detail: probe.stdout.split("\n")[0]!.trim() }
       : { name: "ffmpeg", status: "missing", detail: `${ffmpeg} を実行できません。ffmpeg をインストールしてください` },
   );
+  items.push(await bgmItem(options.bgm));
   return items;
+}
+
+/** BGM の状態。設定した曲ファイルが無い・読めない場合は、描画できないので不足とする */
+async function bgmItem(bgm: BgmSetting | undefined): Promise<EnvironmentItem> {
+  if (!bgm) return { name: "BGM", status: "ok", detail: "なし" };
+  try {
+    return { name: "BGM", status: "ok", detail: describeBgm(await probeBgm(bgm)) };
+  } catch (error) {
+    return { name: "BGM", status: "missing", detail: (error as Error).message.replaceAll("\n", " ") };
+  }
 }
 
 function formatMinutes(minutes: number | undefined): string {
@@ -137,6 +151,9 @@ export function buildBrief(input: BriefInput): string {
     `- 対象: セッション全体(${facts.sessionId?.slice(0, 8) ?? "ID 不明"}${facts.title ? `「${facts.title}」` : ""})`,
     `- 期間: ${start ? `${start} – ${end}` : "不明"}(作業時間 ${formatMinutes(facts.activeMinutes)}、開始からの経過 ${formatMinutes(facts.elapsedMinutes)})`,
     `- 指示 ${number(facts.userPrompts)} 回 ・ ツール実行 ${number(facts.toolCalls)} 回(コマンド ${number(facts.commandsRun)} 回、うちエラー終了 ${number(facts.commandsFailed)} 回)`,
+    facts.videoReport
+      ? `- 動画の作成(指示 ${number(facts.videoReport.userPrompts)} 回・ツール実行 ${number(facts.videoReport.toolCalls)} 回)は除外`
+      : undefined,
     `- 変更ファイル ${number(facts.files.length)} 件(+${number(added)} −${number(removed)})`,
     ...topFiles.map((f) => `  - ${f.path}(+${number(f.added)} −${number(f.removed)}${f.created ? "、新規" : ""})`),
     facts.files.length > topFiles.length ? `  - ほか ${facts.files.length - topFiles.length} 件` : undefined,

@@ -1,8 +1,10 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
+import { bgmGain, bgmLayer } from "./audio/bgm.js";
+import { finishAudio } from "./audio/finish.js";
+import { isOutputPath } from "./output.js";
 import { redactSecrets } from "./redact.js";
 import { normalizeScript } from "./script/normalize.js";
 import { checkedReadingsFile, compareReadings, loadCheckedReadings, mismatchMessage, reviewReasons, speechUnits, } from "./script/readings.js";
@@ -14,35 +16,30 @@ import { encodeWav, peakDbfs } from "./tts/wav.js";
 import { buildDigest, collectFacts } from "./transcript/digest.js";
 import { locateTranscript } from "./transcript/locate.js";
 import { readTranscript } from "./transcript/parse.js";
+import { resolveUserPath } from "./util/path.js";
 import { renderVideo } from "./video/render.js";
 import { buildHtml } from "./video/template.js";
 import { buildTimeline } from "./video/timeline.js";
-/** 動画と作業ファイルの出力先(既定) */
-export const DEFAULT_OUT_DIR = "dopagakix-out";
+export { DEFAULT_OUT_DIR } from "./output.js";
 /**
  * 報告のために書いたファイル(台本など)を、作業の成果として数えないよう集計から除く。
  * 既定の出力先(dopagakix-out)の中と、指定したディレクトリの中にあるファイルが対象。
  */
 export function excludeOutputs(facts, dirs = []) {
     const base = facts.cwd ?? process.cwd();
-    const roots = dirs.map((dir) => path.resolve(dir));
-    const isOutput = (file) => {
-        const absolute = path.resolve(base, file);
-        return (absolute.split(path.sep).includes(DEFAULT_OUT_DIR) ||
-            roots.some((root) => absolute === root || absolute.startsWith(`${root}${path.sep}`)));
-    };
-    const files = facts.files.filter((file) => !isOutput(file.path));
+    const files = facts.files.filter((file) => !isOutputPath(file.path, base, dirs));
     return files.length === facts.files.length ? facts : { ...facts, files };
 }
 /**
- * セッションログを探して読み、画面に出す数値を集計する。
- * outputDirs には、報告の台本などを置くディレクトリを渡す(集計から除く)。
+ * セッションログを探して読み、画面に出す数値を集計する。動画レポートを作っていた区間は集計から除く。
+ * outputDirs には、報告の台本などを置くディレクトリを渡す(変更ファイルの集計から除き、
+ * そこのファイルの編集を動画の作成とみなす)。
  */
 export async function loadSession(options, outputDirs = []) {
     const located = await locateTranscript(options);
     const session = await readTranscript(located.file);
     const sessionId = session.sessionId ?? path.basename(located.file, ".jsonl");
-    return { ...located, session, facts: excludeOutputs(collectFacts(session), outputDirs), sessionId };
+    return { ...located, session, facts: excludeOutputs(collectFacts(session, { outputDirs }), outputDirs), sessionId };
 }
 /** セッションログを、振り返り用のダイジェスト(時系列の要約)にする。 */
 export async function digestSession(options) {
@@ -77,8 +74,8 @@ export async function loadReport(file) {
         const parsed = ScriptFileSchema.safeParse(json);
         if (!parsed.success)
             throw formatError(file, parsed.error);
-        const { script, author, facts, persona, readings } = parsed.data;
-        return { raw: script, script: normalizeScript(script), author, facts, persona, readings };
+        const { script, author, facts, persona, readings, bgm } = parsed.data;
+        return { raw: script, script: normalizeScript(script), author, facts, persona, readings, bgm };
     }
     const parsed = VideoScriptSchema.safeParse(json);
     if (!parsed.success)
@@ -167,8 +164,7 @@ export function resolveRenderPaths(options) {
     const workDir = path.dirname(path.resolve(options.report));
     if (!options.videoDir)
         return { outFile: path.join(workDir, "summary.mp4"), workDir };
-    // 設定ファイル(.claude/settings.json の env など)に書いた値はシェルを通らず、~ が展開されない
-    const videoDir = path.resolve(options.videoDir.replace(/^~(?=$|[\\/])/, () => os.homedir()));
+    const videoDir = resolveUserPath(options.videoDir);
     const title = Array.from(options.title.replace(/[\\/:*?"<>|\p{Cc}]/gu, "_"))
         .slice(0, TITLE_CHARS_IN_FILE_NAME)
         .join("")
@@ -178,6 +174,10 @@ export function resolveRenderPaths(options) {
 }
 /** 読み上げありで、最大音量がこれを下回ったら無音とみなす(CI の確認と同じ基準) */
 export const SILENT_DBFS = -40;
+/** script.json と timeline.json に記録する BGM の設定 */
+function bgmRecord(bgm) {
+    return { file: bgm.file, ...(bgm.credit ? { credit: bgm.credit } : {}), volume: bgm.volume };
+}
 /** 台本から音声と映像を作り、mp4 に書き出す。 */
 export async function renderReport(input, options) {
     const { voice } = options.synth;
@@ -188,6 +188,7 @@ export async function renderReport(input, options) {
         ...(input.persona ? { persona: input.persona } : {}),
         voice: voice ? { enabled: true, ...voice } : { enabled: false },
         ...(input.readings ? { readings: input.readings } : {}),
+        ...(input.bgm ? { bgm: bgmRecord(input.bgm) } : {}),
         facts: input.facts,
         script: input.script,
     };
@@ -206,21 +207,37 @@ export async function renderReport(input, options) {
             throw new Error(`読み上げの音声がほぼ無音です(${level}。${SILENT_DBFS} dBFS 未満)。VOICEVOX エンジン(${voice.name}、スタイル ID ${voice.speaker})の状態を確かめてください。`);
         }
     }
-    const audioFile = path.join(options.workDir, "narration.wav");
-    await writeFile(audioFile, encodeWav(timeline.audio));
-    await writeFile(path.join(options.workDir, "timeline.json"), `${JSON.stringify({ duration: timeline.duration, speed: timeline.speed, credit: timeline.credit, scenes: timeline.scenes }, null, 2)}\n`);
+    const narrationFile = path.join(options.workDir, "narration.wav");
+    await writeFile(narrationFile, encodeWav(timeline.audio));
+    // 音声の仕上げ: BGM を混ぜ、動画ごとの音量をそろえる(BGM がなくても同じ処理をかける)
+    const audio = await finishAudio({
+        narrationFile,
+        layers: input.bgm ? [bgmLayer(input.bgm, timeline.duration)] : [],
+        outFile: path.join(options.workDir, "audio.wav"),
+    });
+    const bgm = input.bgm
+        ? { ...bgmRecord(input.bgm), loudness: input.bgm.loudness, gain: Math.round(bgmGain(input.bgm) * 100) / 100 }
+        : null;
+    const loudness = {
+        input: audio.inputLoudness,
+        output: audio.outputLoudness ?? null,
+        truePeak: audio.outputTruePeak ?? null,
+        normalization: audio.normalization,
+    };
+    await writeFile(path.join(options.workDir, "timeline.json"), `${JSON.stringify({ duration: timeline.duration, speed: timeline.speed, credit: timeline.credit, bgm, loudness, scenes: timeline.scenes }, (_key, value) => (typeof value === "number" && !Number.isFinite(value) ? null : value), 2)}\n`);
     const html = buildHtml({
         script: input.script,
         facts: input.facts,
         scenes: timeline.scenes,
         credit: timeline.credit,
+        bgmCredit: input.bgm?.credit,
         silent: !voice,
         author: input.author,
         timeZone: options.timeZone,
     });
     const stats = await renderVideo(html, {
         outFile: options.outFile,
-        audioFile,
+        audioFile: audio.outFile,
         duration: timeline.duration,
         fps: options.fps,
         scale: options.scale,
@@ -230,6 +247,7 @@ export async function renderReport(input, options) {
     return {
         outFile: options.outFile,
         scriptFile,
+        audioFile: audio.outFile,
         duration: timeline.duration,
         speed: timeline.speed,
         credit: timeline.credit,

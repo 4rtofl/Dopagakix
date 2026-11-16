@@ -97,12 +97,6 @@ function openingScene(script, facts, timeZone) {
     </div>
     ${period ? `<div ${enter("when", 6)}>${escapeHtml(period)}</div>` : ""}`;
 }
-function requestScene(script, facts) {
-    return `
-    ${sectionHead("ご依頼の内容")}
-    <blockquote ${enter("quote", 1)}>「${escapeHtml(script.request.summary)}」</blockquote>
-    <div ${enter("note", 2)}>指示 ${number(facts.userPrompts)} 回 ・ ツール実行 ${number(facts.toolCalls)} 回</div>`;
-}
 /** 0 行でなければ、極端に差があっても見える棒の長さ(%) */
 const MIN_BAR = 1;
 /**
@@ -236,7 +230,7 @@ function decisionsScene(script) {
         .join("");
     return `${sectionHead("ご判断ください", true)}<ol class="rows">${list}</ol>`;
 }
-function closingScene(script, facts, credit, author, timeZone) {
+function closingScene(script, facts, credit, bgmCredit, author, timeZone) {
     const items = script.next_steps.items;
     const next = items.length
         ? `${sectionHead("次のステップ")}<ul class="rows next">${items
@@ -250,6 +244,7 @@ function closingScene(script, facts, credit, author, timeZone) {
             ? `報告: 作業をした AI エージェント${models}による自己報告。数値はセッションログから自動集計`
             : "報告: 手動で作成。数値はセッションログから自動集計",
         credit ? `音声: ${credit}` : undefined,
+        bgmCredit,
         `セッション ${facts.sessionId?.slice(0, 8) ?? "-"} ・ ${formatDateTime(facts.endTime, timeZone) || "-"}`,
     ]
         .filter(Boolean)
@@ -346,13 +341,6 @@ main { position: absolute; top: 230px; left: 80px; right: 80px; height: 1180px; 
 .section-title { font-size: calc(42 * var(--u)); font-weight: 900; letter-spacing: 0.04em; }
 .section.attention .rule { border-top-color: var(--attention); border-top-width: 4px; }
 .section.attention .section-title { color: var(--attention); }
-
-/* 依頼 */
-.quote {
-  font-family: var(--serif); font-weight: 700; font-size: calc(60 * var(--u)); line-height: 1.6;
-  text-indent: -0.5em; padding-left: 0.5em; text-wrap: pretty; font-feature-settings: "palt";
-}
-.note { font-size: calc(28 * var(--u)); color: var(--ink-3); }
 
 /* 罫線で区切った行 */
 .rows { list-style: none; display: flex; flex-direction: column; }
@@ -513,15 +501,14 @@ const PAGE_SCRIPT = String.raw `
 `;
 /** 動画 1 本分のページを作る。フォントは /fonts/ 以下から読み込む前提。 */
 export function buildHtml(input) {
-    const { script, facts, scenes, credit, silent, author, timeZone } = input;
+    const { script, facts, scenes, credit, bgmCredit, silent, author, timeZone } = input;
     const bodies = {
         opening: openingScene(script, facts, timeZone),
-        request: requestScene(script, facts),
         work: workScene(script, facts),
         figure: script.figure ? figureScene(script.figure, scenes.find((scene) => scene.kind === "figure")) : "",
         verification: verificationScene(script),
         decisions: decisionsScene(script),
-        closing: closingScene(script, facts, credit, author, timeZone),
+        closing: closingScene(script, facts, credit, bgmCredit, author, timeZone),
     };
     const sections = scenes
         .map((scene) => `<section class="scene" data-kind="${scene.kind}"><div class="content">${bodies[scene.kind]}</div></section>`)

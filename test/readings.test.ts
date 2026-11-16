@@ -152,7 +152,7 @@ describe("speechUnits", () => {
     const script = await loadScript();
     script.figure = { type: "flow", title: "流れ", steps: [{ label: "受付" }, { label: "確認", changed: true }], narration: ["図の文です。"] };
     const order = [...new Set(speechUnits(script).map((unit) => unit.at.split(".")[0]))];
-    expect(order).toEqual(["opening", "request", "work", "figure", "verification", "decisions", "next_steps"]);
+    expect(order).toEqual(["opening", "work", "figure", "verification", "decisions", "next_steps"]);
     expect(speechUnits(script)).toContainEqual({ at: "figure.narration[0]", text: "図の文です。" });
   });
 });

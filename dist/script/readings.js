@@ -129,7 +129,7 @@ export function reviewReasons(sent, kana) {
     }
     return reasons;
 }
-const NARRATION_KEYS = ["opening", "request", "work", "verification", "decisions", "next_steps"];
+const NARRATION_KEYS = ["opening", "work", "verification", "decisions", "next_steps"];
 /** 台本の読み上げ文を、描画のときに音声を作るのと同じ単位(表示用に整えた文を、字幕 1 枚ごとに分けたもの)にする */
 export function speechUnits(script) {
     const units = (key, narration) => narration.flatMap((line, i) => splitCaption(cleanText(line)).map((text) => ({ at: `${key}.narration[${i}]`, text })));

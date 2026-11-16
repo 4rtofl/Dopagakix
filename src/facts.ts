@@ -12,6 +12,14 @@ export const FileChangeSchema = z.object({
   created: z.boolean(),
 });
 
+/** 集計から除いた、動画レポートの作成の区間 */
+export const VideoReportExclusionSchema = z.object({
+  /** 区間の数(動画を作った回数) */
+  spans: z.number(),
+  userPrompts: z.number(),
+  toolCalls: z.number(),
+});
+
 export const SessionFactsSchema = z.object({
   sessionId: z.string().optional(),
   title: z.string().optional(),
@@ -31,7 +39,10 @@ export const SessionFactsSchema = z.object({
   commandsFailed: z.number(),
   files: z.array(FileChangeSchema),
   models: z.array(z.string()),
+  /** 集計から除いた動画の作成(なければ省略)。期間・作業時間・指示・ツール実行・コマンドの数に含めていない */
+  videoReport: VideoReportExclusionSchema.optional(),
 });
 
 export type FileChange = z.infer<typeof FileChangeSchema>;
+export type VideoReportExclusion = z.infer<typeof VideoReportExclusionSchema>;
 export type SessionFacts = z.infer<typeof SessionFactsSchema>;

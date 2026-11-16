@@ -1,9 +1,11 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
+import { type BgmSetting, type BgmTrack, bgmGain, bgmLayer } from "./audio/bgm.js";
+import { finishAudio } from "./audio/finish.js";
 import type { SessionFacts } from "./facts.js";
+import { isOutputPath } from "./output.js";
 import { redactSecrets } from "./redact.js";
 import { normalizeScript } from "./script/normalize.js";
 import {
@@ -27,12 +29,12 @@ import { buildDigest, collectFacts } from "./transcript/digest.js";
 import { type LocatedTranscript, type LocateOptions, locateTranscript } from "./transcript/locate.js";
 import { readTranscript } from "./transcript/parse.js";
 import type { ParsedSession } from "./transcript/types.js";
+import { resolveUserPath } from "./util/path.js";
 import { type RenderStats, renderVideo } from "./video/render.js";
 import { buildHtml } from "./video/template.js";
 import { buildTimeline } from "./video/timeline.js";
 
-/** 動画と作業ファイルの出力先(既定) */
-export const DEFAULT_OUT_DIR = "dopagakix-out";
+export { DEFAULT_OUT_DIR } from "./output.js";
 
 /**
  * 報告のために書いたファイル(台本など)を、作業の成果として数えないよう集計から除く。
@@ -40,15 +42,7 @@ export const DEFAULT_OUT_DIR = "dopagakix-out";
  */
 export function excludeOutputs(facts: SessionFacts, dirs: string[] = []): SessionFacts {
   const base = facts.cwd ?? process.cwd();
-  const roots = dirs.map((dir) => path.resolve(dir));
-  const isOutput = (file: string) => {
-    const absolute = path.resolve(base, file);
-    return (
-      absolute.split(path.sep).includes(DEFAULT_OUT_DIR) ||
-      roots.some((root) => absolute === root || absolute.startsWith(`${root}${path.sep}`))
-    );
-  };
-  const files = facts.files.filter((file) => !isOutput(file.path));
+  const files = facts.files.filter((file) => !isOutputPath(file.path, base, dirs));
   return files.length === facts.files.length ? facts : { ...facts, files };
 }
 
@@ -60,14 +54,15 @@ export interface LoadedSession extends LocatedTranscript {
 }
 
 /**
- * セッションログを探して読み、画面に出す数値を集計する。
- * outputDirs には、報告の台本などを置くディレクトリを渡す(集計から除く)。
+ * セッションログを探して読み、画面に出す数値を集計する。動画レポートを作っていた区間は集計から除く。
+ * outputDirs には、報告の台本などを置くディレクトリを渡す(変更ファイルの集計から除き、
+ * そこのファイルの編集を動画の作成とみなす)。
  */
 export async function loadSession(options: LocateOptions, outputDirs: string[] = []): Promise<LoadedSession> {
   const located = await locateTranscript(options);
   const session = await readTranscript(located.file);
   const sessionId = session.sessionId ?? path.basename(located.file, ".jsonl");
-  return { ...located, session, facts: excludeOutputs(collectFacts(session), outputDirs), sessionId };
+  return { ...located, session, facts: excludeOutputs(collectFacts(session, { outputDirs }), outputDirs), sessionId };
 }
 
 export interface DigestResult {
@@ -108,6 +103,8 @@ export interface LoadedReport {
   persona?: { id: string; name: string };
   /** script.json に記録された、描画に使った読みの指定 */
   readings?: Readings;
+  /** script.json に記録された BGM の設定 */
+  bgm?: BgmSetting;
 }
 
 function formatError(file: string, error: z.ZodError): Error {
@@ -128,8 +125,8 @@ export async function loadReport(file: string): Promise<LoadedReport> {
   if (json !== null && typeof json === "object" && "version" in json) {
     const parsed = ScriptFileSchema.safeParse(json);
     if (!parsed.success) throw formatError(file, parsed.error);
-    const { script, author, facts, persona, readings } = parsed.data;
-    return { raw: script, script: normalizeScript(script), author, facts, persona, readings };
+    const { script, author, facts, persona, readings, bgm } = parsed.data;
+    return { raw: script, script: normalizeScript(script), author, facts, persona, readings, bgm };
   }
   const parsed = VideoScriptSchema.safeParse(json);
   if (!parsed.success) throw formatError(file, parsed.error);
@@ -261,8 +258,7 @@ export function resolveRenderPaths(options: RenderPathOptions): { outFile: strin
   const workDir = path.dirname(path.resolve(options.report));
   if (!options.videoDir) return { outFile: path.join(workDir, "summary.mp4"), workDir };
 
-  // 設定ファイル(.claude/settings.json の env など)に書いた値はシェルを通らず、~ が展開されない
-  const videoDir = path.resolve(options.videoDir.replace(/^~(?=$|[\\/])/, () => os.homedir()));
+  const videoDir = resolveUserPath(options.videoDir);
   const title = Array.from(options.title.replace(/[\\/:*?"<>|\p{Cc}]/gu, "_"))
     .slice(0, TITLE_CHARS_IN_FILE_NAME)
     .join("")
@@ -278,6 +274,8 @@ export interface RenderInput {
   persona?: { id: string; name: string };
   /** 描画に使う読みの指定(script.json に記録し、描画し直しても同じ読みにする) */
   readings?: Readings;
+  /** BGM(probeBgm で確かめたもの)。なければ BGM なし */
+  bgm?: BgmTrack;
 }
 
 export interface RenderPipelineOptions {
@@ -301,6 +299,8 @@ export interface RenderResult {
   outFile: string;
   /** 描画に使った台本と事実情報の記録 */
   scriptFile: string;
+  /** 仕上げた音声(BGM を混ぜ、音量をそろえたもの) */
+  audioFile: string;
   duration: number;
   speed: number;
   credit: string | undefined;
@@ -309,6 +309,11 @@ export interface RenderResult {
 
 /** 読み上げありで、最大音量がこれを下回ったら無音とみなす(CI の確認と同じ基準) */
 export const SILENT_DBFS = -40;
+
+/** script.json と timeline.json に記録する BGM の設定 */
+function bgmRecord(bgm: BgmTrack): BgmSetting {
+  return { file: bgm.file, ...(bgm.credit ? { credit: bgm.credit } : {}), volume: bgm.volume };
+}
 
 /** 台本から音声と映像を作り、mp4 に書き出す。 */
 export async function renderReport(input: RenderInput, options: RenderPipelineOptions): Promise<RenderResult> {
@@ -320,6 +325,7 @@ export async function renderReport(input: RenderInput, options: RenderPipelineOp
     ...(input.persona ? { persona: input.persona } : {}),
     voice: voice ? { enabled: true, ...voice } : { enabled: false },
     ...(input.readings ? { readings: input.readings } : {}),
+    ...(input.bgm ? { bgm: bgmRecord(input.bgm) } : {}),
     facts: input.facts,
     script: input.script,
   };
@@ -341,11 +347,30 @@ export async function renderReport(input: RenderInput, options: RenderPipelineOp
       );
     }
   }
-  const audioFile = path.join(options.workDir, "narration.wav");
-  await writeFile(audioFile, encodeWav(timeline.audio));
+  const narrationFile = path.join(options.workDir, "narration.wav");
+  await writeFile(narrationFile, encodeWav(timeline.audio));
+  // 音声の仕上げ: BGM を混ぜ、動画ごとの音量をそろえる(BGM がなくても同じ処理をかける)
+  const audio = await finishAudio({
+    narrationFile,
+    layers: input.bgm ? [bgmLayer(input.bgm, timeline.duration)] : [],
+    outFile: path.join(options.workDir, "audio.wav"),
+  });
+  const bgm = input.bgm
+    ? { ...bgmRecord(input.bgm), loudness: input.bgm.loudness, gain: Math.round(bgmGain(input.bgm) * 100) / 100 }
+    : null;
+  const loudness = {
+    input: audio.inputLoudness,
+    output: audio.outputLoudness ?? null,
+    truePeak: audio.outputTruePeak ?? null,
+    normalization: audio.normalization,
+  };
   await writeFile(
     path.join(options.workDir, "timeline.json"),
-    `${JSON.stringify({ duration: timeline.duration, speed: timeline.speed, credit: timeline.credit, scenes: timeline.scenes }, null, 2)}\n`,
+    `${JSON.stringify(
+      { duration: timeline.duration, speed: timeline.speed, credit: timeline.credit, bgm, loudness, scenes: timeline.scenes },
+      (_key, value: unknown) => (typeof value === "number" && !Number.isFinite(value) ? null : value),
+      2,
+    )}\n`,
   );
 
   const html = buildHtml({
@@ -353,13 +378,14 @@ export async function renderReport(input: RenderInput, options: RenderPipelineOp
     facts: input.facts,
     scenes: timeline.scenes,
     credit: timeline.credit,
+    bgmCredit: input.bgm?.credit,
     silent: !voice,
     author: input.author,
     timeZone: options.timeZone,
   });
   const stats = await renderVideo(html, {
     outFile: options.outFile,
-    audioFile,
+    audioFile: audio.outFile,
     duration: timeline.duration,
     fps: options.fps,
     scale: options.scale,
@@ -369,6 +395,7 @@ export async function renderReport(input: RenderInput, options: RenderPipelineOp
   return {
     outFile: options.outFile,
     scriptFile,
+    audioFile: audio.outFile,
     duration: timeline.duration,
     speed: timeline.speed,
     credit: timeline.credit,

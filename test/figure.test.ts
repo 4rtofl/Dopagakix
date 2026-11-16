@@ -91,7 +91,7 @@ describe("checkScript(図)", () => {
 
     const zundamon = checkScript({ ...script, figure: flow }, { seconds: 60, persona: ZUNDAMON });
     expect(zundamon.issues.map((issue) => issue.at)).toContain("figure.narration[0]");
-    expect(zundamon.sentences).toBe(9);
+    expect(zundamon.sentences).toBe(8);
   });
 
   it("件数と文字数の上限超えを挙げる", async () => {
@@ -149,8 +149,8 @@ describe("buildTimeline(図)", () => {
   it("figure があれば「実施した作業」の次に図解シーンを入れる", async () => {
     const script = await loadScript();
     const kinds = async (s: VideoScript) => (await buildTimeline(s, new SilentSynthesizer(), { maxSeconds: 120, speed: 1, maxSpeed: 1.3 })).scenes.map((x) => x.kind);
-    expect(await kinds(script)).toEqual(["opening", "request", "work", "verification", "decisions", "closing"]);
-    expect(await kinds({ ...script, figure: flow })).toEqual(["opening", "request", "work", "figure", "verification", "decisions", "closing"]);
+    expect(await kinds(script)).toEqual(["opening", "work", "verification", "decisions", "closing"]);
+    expect(await kinds({ ...script, figure: flow })).toEqual(["opening", "work", "figure", "verification", "decisions", "closing"]);
   });
 });
 
