@@ -303,11 +303,18 @@ function makeSfxDir(dir: string, files: Partial<Record<"page" | "result" | "end"
   for (const [kind, seconds] of Object.entries(files)) makeSine(path.join(dir, `${kind}.wav`), { frequency: 2000, seconds });
 }
 
+/**
+ * 鳴り始めを調べる区間の始まり。同じシーンで先に鳴った音(ページの切り替えと「以上」など)と重なる区間は、
+ * その音を含むので除く。at 以上を返したら、鳴り始めは調べられない
+ */
+function quietBefore(cues: SfxCue[], at: number): number {
+  return Math.max(at - 0.05, ...cues.filter((c) => c.at < at && c.until > at - 0.05).map((c) => c.until));
+}
+
 /** 効果音の帯域で、各時刻に鳴っていること、鳴らない場面では鳴っていないこと、読み上げ中に鳴っていないことを確かめる */
 function expectSfx(file: string, scenes: TimedScene[], expected: SfxCue[], absent: SfxCue[]): void {
   const band = sfxBand(file);
-  // 同じシーンで先に鳴った音(ページの切り替えと「以上」など)と重なる区間は、その音を含むので除いて調べる
-  const quietFrom = (at: number) => Math.max(at - 0.05, ...expected.filter((c) => c.at < at && c.until > at - 0.05).map((c) => c.until));
+  const quietFrom = (at: number) => quietBefore(expected, at);
   const nextStart = (cue: SfxCue) => Math.min(cue.until, ...expected.filter((c) => c.at > cue.at).map((c) => c.at));
   for (const cue of expected) {
     const label = `${cue.kind} @ ${cue.at}`;
@@ -407,7 +414,8 @@ describe.runIf(voicevoxAvailable && canRender)("効果音付きの動画(VOICEVO
     const without = sfxBand(plain);
     for (const cue of cues) {
       expect(peakDb(withSfx, cue.at, cue.until) - peakDb(without, cue.at, cue.until), `${cue.kind} @ ${cue.at}`).toBeGreaterThan(20);
-      expect(Math.abs(onsetAfter(withSfx, cue.at - 0.05, -40)! - cue.at), `${cue.kind} @ ${cue.at}`).toBeLessThan(0.03);
+      const from = quietBefore(cues, cue.at);
+      if (from < cue.at) expect(Math.abs(onsetAfter(withSfx, from, -40)! - cue.at), `${cue.kind} @ ${cue.at}`).toBeLessThan(0.03);
     }
     for (const [start, end] of speechRanges(timeline.scenes)) {
       expect(Math.abs(rmsDb(withSfx, start, end) - rmsDb(without, start, end)), `読み上げ ${start}〜${end}`).toBeLessThan(1);
