@@ -52,19 +52,22 @@ class ToneSynthesizer implements Synthesizer {
 const ffmpeg = process.env.FFMPEG_PATH ?? "ffmpeg";
 const BAND_RATE = 16_000;
 
-/** 効果音(2 kHz の合成音)の帯域だけを取り出したモノラルの標本 */
-function sfxBand(file: string): Float32Array {
+/** モノラルの標本。filter を渡せば、その帯域だけを取り出す */
+function samplesOf(file: string, filter?: string): Float32Array {
   const raw = execFileSync(
     ffmpeg,
     [
       ...["-hide_banner", "-loglevel", "error", "-i", file, "-map", "0:a:0"],
-      ...["-af", "bandpass=f=2000:width_type=q:w=8,bandpass=f=2000:width_type=q:w=8", "-ac", "1", "-ar", String(BAND_RATE)],
-      ...["-f", "f32le", "-"],
+      ...(filter ? ["-af", filter] : []),
+      ...["-ac", "1", "-ar", String(BAND_RATE), "-f", "f32le", "-"],
     ],
     { maxBuffer: 256 * 1024 * 1024 },
   );
   return new Float32Array(raw.buffer, raw.byteOffset, raw.byteLength / 4);
 }
+
+/** 効果音(2 kHz の合成音)の帯域だけを取り出したモノラルの標本 */
+const sfxBand = (file: string) => samplesOf(file, "bandpass=f=2000:width_type=q:w=8,bandpass=f=2000:width_type=q:w=8");
 
 /** start〜end 秒の RMS(dB) */
 function rmsDb(samples: Float32Array, start: number, end: number): number {
@@ -412,13 +415,19 @@ describe.runIf(voicevoxAvailable && canRender)("効果音付きの動画(VOICEVO
     await finishAudio({ narrationFile: path.join(work, "narration.wav"), outFile: plain });
     const withSfx = sfxBand(result.audioFile);
     const without = sfxBand(plain);
+    const withSfxAll = samplesOf(result.audioFile);
+    const withoutAll = samplesOf(plain);
     for (const cue of cues) {
       expect(peakDb(withSfx, cue.at, cue.until) - peakDb(without, cue.at, cue.until), `${cue.kind} @ ${cue.at}`).toBeGreaterThan(20);
       const from = quietBefore(cues, cue.at);
       if (from < cue.at) expect(Math.abs(onsetAfter(withSfx, from, -40)! - cue.at), `${cue.kind} @ ${cue.at}`).toBeLessThan(0.03);
     }
+    // 声はピークが高く、loudnorm が時間とともに音量を変える(dynamic)ことがあるため、区間ごとに
+    // 「効果音の帯域の音量 − 全体の音量」を比べる(音量の上げ下げは両方に同じだけかかるので打ち消し合う)
+    const share = (band: Float32Array, all: Float32Array, start: number, end: number) => rmsDb(band, start, end) - rmsDb(all, start, end);
     for (const [start, end] of speechRanges(timeline.scenes)) {
-      expect(Math.abs(rmsDb(withSfx, start, end) - rmsDb(without, start, end)), `読み上げ ${start}〜${end}`).toBeLessThan(1);
+      const difference = share(withSfx, withSfxAll, start, end) - share(without, withoutAll, start, end);
+      expect(Math.abs(difference), `読み上げ ${start}〜${end}`).toBeLessThan(1);
     }
     expect(loudnessOf(path.join(work, "out.mp4")).integrated).toBeCloseTo(-16, 0);
     expect(await readFile(path.join(work, "script.json"), "utf8")).toContain('"credit": "効果音：合成音"');
