@@ -148,9 +148,13 @@ const NARRATION_KEYS = ["opening", "work", "verification", "decisions", "next_st
 
 /** 台本の読み上げ文を、描画のときに音声を作るのと同じ単位(表示用に整えた文を、字幕 1 枚ごとに分けたもの)にする */
 export function speechUnits(script: VideoScript): SpeechUnit[] {
-  return NARRATION_KEYS.flatMap((key) =>
-    script[key].narration.flatMap((line, i) => splitCaption(cleanText(line)).map((text) => ({ at: `${key}.narration[${i}]`, text }))),
-  );
+  const units = (key: string, narration: string[]) =>
+    narration.flatMap((line, i) => splitCaption(cleanText(line)).map((text) => ({ at: `${key}.narration[${i}]`, text })));
+  // 図解シーン(任意)は「実施した作業」の次に読み上げる
+  return NARRATION_KEYS.flatMap((key) => [
+    ...units(key, script[key].narration),
+    ...(key === "work" && script.figure ? units("figure", script.figure.narration) : []),
+  ]);
 }
 
 /** 読みの確認結果(check が保存し、render が照らし合わせる) */

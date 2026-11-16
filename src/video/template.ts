@@ -1,7 +1,7 @@
 import type { FileChange, SessionFacts } from "../facts.js";
-import { type Author, type CheckResult, STATUS_LABELS, type ScriptStatus, type VideoScript } from "../script/schema.js";
+import { type Author, type CheckResult, type Figure, STATUS_LABELS, type ScriptStatus, type VideoScript } from "../script/schema.js";
 import { formatDateTime } from "../util/time.js";
-import type { TimedScene } from "./timeline.js";
+import { type SceneKind, splitCaption, type TimedScene } from "./timeline.js";
 
 export const VIDEO_WIDTH = 1080;
 export const VIDEO_HEIGHT = 1920;
@@ -124,17 +124,41 @@ function openingScene(script: VideoScript, facts: SessionFacts, timeZone?: strin
     ${period ? `<div ${enter("when", 6)}>${escapeHtml(period)}</div>` : ""}`;
 }
 
+/** 0 行でなければ、極端に差があっても見える棒の長さ(%) */
+const MIN_BAR = 1;
+
+/**
+ * 変更ファイルの各行に付ける棒の長さ(行の幅に対する %)。追加と削除の行数に比例させ、
+ * 渡したファイルのうち変更行数が最大のものを全幅にする。0 行の側は 0(棒を出さない)。
+ */
+export function fileBars(files: FileChange[]): Array<{ added: number; removed: number }> {
+  const max = Math.max(0, ...files.map((f) => f.added + f.removed));
+  const width = (n: number) => (n === 0 || max === 0 ? 0 : Math.max(MIN_BAR, Math.round((n / max) * 1000) / 10));
+  return files.map((f) => ({ added: width(f.added), removed: width(f.removed) }));
+}
+
 function fileList(files: FileChange[], limit: number): string {
   if (files.length === 0) return "";
   const shown = files.slice(0, limit);
   const added = files.reduce((n, f) => n + f.added, 0);
   const removed = files.reduce((n, f) => n + f.removed, 0);
+  const bars = fileBars(shown);
   const rows = shown
-    .map(
-      (f) =>
-        `<li class="file"><span class="path">${escapeHtml(shortenPath(f.path))}</span>` +
-        `<span class="diff">${f.created ? '<span class="new">新規</span>' : ""}${delta("+", f.added)} ${delta("−", f.removed)}</span></li>`,
-    )
+    .map((f, i) => {
+      const bar = bars[i]!;
+      // 棒は罫線と同じく左から引く。ファイルの一覧(--i:6)が出たあとに上から順に
+      const graph =
+        bar.added + bar.removed > 0
+          ? `<div class="bar rule-in" style="--i:${8 + i}">` +
+            (bar.added ? `<span class="bar-add" style="width:${bar.added}%"></span>` : "") +
+            (bar.removed ? `<span class="bar-del" style="width:${bar.removed}%"></span>` : "") +
+            "</div>"
+          : "";
+      return (
+        `<li class="file"><div class="file-line"><span class="path">${escapeHtml(shortenPath(f.path))}</span>` +
+        `<span class="diff">${f.created ? '<span class="new">新規</span>' : ""}${delta("+", f.added)} ${delta("−", f.removed)}</span></div>${graph}</li>`
+      );
+    })
     .join("");
   const more = files.length > shown.length ? `<div class="more">ほか ${files.length - shown.length} ファイル</div>` : "";
   return `<div ${enter("files", 6)}>
@@ -154,6 +178,87 @@ function workScene(script: VideoScript, facts: SessionFacts): string {
     ${sectionHead("実施した作業")}
     <ol class="rows">${items}</ol>
     ${fileList(facts.files, script.work.items.length >= 4 ? 3 : 5)}`;
+}
+
+/** 図の要素の登場時刻(シーンの開始からの秒) */
+export interface FigureTiming {
+  /** before_after: 変更前・矢印・変更後 */
+  before?: number;
+  arrow?: number;
+  after?: number;
+  /** flow: 各段と、その段の上の矢印(先頭の段は矢印なし) */
+  steps?: number[];
+  arrows?: number[];
+}
+
+/** 最初の要素は欄見出しの直後に出す */
+const FIGURE_FIRST = 0.2;
+/** 矢印を引き終えてから次の要素を出す */
+const ARROW_LEAD = 0.3;
+/** 字幕は読み上げより少し前に出る(PAGE_SCRIPT の CAPTION_LEAD)。図も字幕に合わせる */
+const FIGURE_CUE_LEAD = 0.1;
+const FLOW_GAP = { min: 0.25, max: 1.2 } as const;
+
+const ms = (seconds: number) => Math.round(seconds * 1000) / 1000;
+
+/**
+ * 図の要素を読み上げに合わせて出す時刻を決める。字幕の時刻は描画の前に決まっているので、
+ * 同じ台本からは毎回同じ時刻になる。
+ * - before_after: 変更前を最初に、変更後を 2 文目の読み上げ開始に合わせて出す(1 文だけなら、その文の中ほど)。
+ * - flow: 段を上から順に出し、最後の段が読み上げの中ほどで出そろうよう間隔をとる。
+ */
+export function figureTiming(figure: Figure, scene: TimedScene): FigureTiming {
+  const cues = scene.cues.map((cue) => ({ start: cue.start - scene.start, end: cue.end - scene.start }));
+  if (figure.type === "before_after") {
+    // 字幕は長い文を分けて表示するので、1 文目が何枚の字幕になったかを数えて 2 文目の先頭を探す
+    const firstCues = figure.narration[0] ? splitCaption(figure.narration[0]).length : 0;
+    const second = cues[firstCues];
+    const first = cues.slice(0, firstCues);
+    let after = FIGURE_FIRST + 0.6;
+    if (second) after = second.start - FIGURE_CUE_LEAD;
+    else if (first.length > 0) after = (first[0]!.start + first.at(-1)!.end) / 2;
+    after = Math.max(after, FIGURE_FIRST + ARROW_LEAD + 0.1);
+    return { before: FIGURE_FIRST, arrow: ms(after - ARROW_LEAD), after: ms(after) };
+  }
+  const n = figure.steps.length;
+  const speechStart = cues[0]?.start ?? FIGURE_FIRST;
+  const speechEnd = cues.at(-1)?.end ?? speechStart + n * FLOW_GAP.min;
+  const target = (speechStart + speechEnd) / 2;
+  const gap = n > 1 ? Math.min(FLOW_GAP.max, Math.max(FLOW_GAP.min, (target - FIGURE_FIRST) / (n - 1))) : 0;
+  const steps = figure.steps.map((_, i) => ms(FIGURE_FIRST + i * gap));
+  return { steps, arrows: steps.slice(1).map((t) => ms(t - ARROW_LEAD)) };
+}
+
+/** 下向きの矢印。軸を引いてから矢じりを引く(「線を引く」動き) */
+function arrow(cls: string, at: number): string {
+  return (
+    `<svg class="${cls}" viewBox="0 0 24 48" aria-hidden="true">` +
+    `<path class="stroke" pathLength="1" d="M12 2 V45" style="animation-delay:${ms(at)}s"/>` +
+    `<path class="stroke" pathLength="1" d="M3 35 L12 45 L21 35" style="animation-delay:${ms(at + 0.18)}s"/></svg>`
+  );
+}
+
+/** 指定した時刻(シーンの開始からの秒)に、下からフェードインさせる */
+const enterAt = (cls: string, at: number) => `class="enter ${cls}" style="animation-delay:${ms(at)}s"`;
+
+function figureScene(figure: Figure, scene: TimedScene | undefined): string {
+  const timing = figureTiming(figure, scene ?? { kind: "figure", start: 0, end: 0, cues: [] });
+  if (figure.type === "before_after") {
+    const side = (cls: "before" | "after", label: string, lines: string[], at: number) =>
+      `<div ${enterAt(`ba-side ${cls}`, at)}><div class="ba-label">${label}</div>` +
+      `<ul class="ba-lines">${lines.map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul></div>`;
+    return `${sectionHead(figure.title)}
+    <div class="ba">${side("before", "変更前", figure.before, timing.before!)}${arrow("ba-arrow", timing.arrow!)}${side("after", "変更後", figure.after, timing.after!)}</div>`;
+  }
+  const steps = figure.steps
+    .map((step, i) => {
+      const label = step.changed ? `<span class="marker">${escapeHtml(step.label)}</span>` : escapeHtml(step.label);
+      const note = step.note ? `<div class="step-note">${escapeHtml(step.note)}</div>` : "";
+      const box = `<li ${enterAt(`step${step.changed ? " changed" : ""}`, timing.steps![i]!)}><div class="step-label">${label}</div>${note}</li>`;
+      return i === 0 ? box : `<li class="flow-arrow">${arrow("", timing.arrows![i - 1]!)}</li>${box}`;
+    })
+    .join("");
+  return `${sectionHead(figure.title)}<ol class="flow">${steps}</ol>`;
 }
 
 function verificationScene(script: VideoScript): string {
@@ -330,17 +435,39 @@ main { position: absolute; top: 230px; left: 80px; right: 80px; height: 1180px; 
 .files-head { font-size: calc(30 * var(--u)); font-weight: 700; color: var(--ink-2); margin-bottom: calc(10 * var(--u)); }
 .files-head b { color: var(--ink); font-size: calc(36 * var(--u)); }
 .files ul { list-style: none; }
-.file { display: flex; justify-content: space-between; gap: calc(24 * var(--u)); font-size: calc(28 * var(--u)); line-height: 1.8; border-bottom: 1px dotted var(--rule); }
+.file { font-size: calc(28 * var(--u)); border-bottom: 1px dotted var(--rule); }
+.file-line { display: flex; justify-content: space-between; gap: calc(24 * var(--u)); line-height: 1.6; }
 .file .path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file .diff { flex: none; font-variant-numeric: tabular-nums; }
 .file .new { font-family: var(--gothic); font-size: calc(22 * var(--u)); font-weight: 700; color: var(--ink-2); border: 1px solid var(--ink-3); padding: 0 calc(8 * var(--u)); margin-right: calc(14 * var(--u)); vertical-align: 2px; }
+/* 変更行数の棒: 追加(緑)と削除(赤)を続けて置く。行の高さを大きく変えないよう細くする */
+.bar { display: flex; height: calc(6 * var(--u)); margin: calc(2 * var(--u)) 0 calc(8 * var(--u)); }
+.bar-add { background: var(--pass); }
+.bar-del { background: var(--fail); }
 .files .more { font-size: calc(26 * var(--u)); color: var(--ink-3); margin-top: calc(8 * var(--u)); }
 
 /* 判断事項: 見出しに蛍光ペンの下線 */
 .decision .row-text { font-weight: 400; }
 .d-title { font-size: calc(48 * var(--u)); font-weight: 900; line-height: 1.45; text-wrap: balance; }
-.d-title .marker { background: linear-gradient(transparent 62%, var(--marker) 62%); }
 .d-detail { margin-top: calc(10 * var(--u)); font-size: calc(34 * var(--u)); font-weight: 500; line-height: 1.6; color: var(--ink-2); text-wrap: pretty; }
+
+/* 図解: 枠と矢印は墨の細い罫線。角丸・影・背景の塗りは使わない(カードに見せない) */
+.ba { display: flex; flex-direction: column; align-items: stretch; }
+.ba-side { border: 1.5px solid var(--ink); padding: calc(22 * var(--u)) calc(36 * var(--u)) calc(28 * var(--u)); }
+.ba-side.before { border-color: var(--ink-3); border-width: 1px; }
+.ba-label { font-size: calc(28 * var(--u)); font-weight: 700; color: var(--ink-3); letter-spacing: 0.04em; margin-bottom: calc(10 * var(--u)); }
+.ba-lines { list-style: none; display: flex; flex-direction: column; gap: calc(8 * var(--u)); }
+.ba-lines li { font-size: calc(44 * var(--u)); font-weight: 700; line-height: 1.45; }
+.ba-side.before .ba-lines li { font-weight: 500; color: var(--ink-2); }
+.ba-arrow .stroke { stroke-width: 1.4; }
+.ba-arrow { display: block; align-self: center; width: calc(36 * var(--u)); height: calc(72 * var(--u)); margin: calc(10 * var(--u)) 0; }
+.flow { list-style: none; display: flex; flex-direction: column; }
+.step { border: 1.5px solid var(--ink); padding: calc(16 * var(--u)) calc(30 * var(--u)); }
+.step-label { font-size: calc(42 * var(--u)); font-weight: 700; line-height: 1.4; }
+.step-note { margin-top: calc(4 * var(--u)); font-size: calc(30 * var(--u)); font-weight: 500; line-height: 1.5; color: var(--ink-2); }
+.step .marker, .flow-arrow svg { display: block; margin: 0 auto; width: calc(28 * var(--u)); height: calc(52 * var(--u)); }
+.stroke { fill: none; stroke: var(--ink); stroke-width: 2; stroke-dasharray: 1; animation: stroke 0.22s cubic-bezier(0.2, 0, 0, 1) both; }
+@keyframes stroke { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
 
 /* 結び */
 .next .row { grid-template-columns: calc(56 * var(--u)) 1fr; }
@@ -447,9 +574,10 @@ const PAGE_SCRIPT = String.raw`
 /** 動画 1 本分のページを作る。フォントは /fonts/ 以下から読み込む前提。 */
 export function buildHtml(input: TemplateInput): string {
   const { script, facts, scenes, credit, bgmCredit, silent, author, timeZone } = input;
-  const bodies = {
+  const bodies: Record<SceneKind, string> = {
     opening: openingScene(script, facts, timeZone),
     work: workScene(script, facts),
+    figure: script.figure ? figureScene(script.figure, scenes.find((scene) => scene.kind === "figure")) : "",
     verification: verificationScene(script),
     decisions: decisionsScene(script),
     closing: closingScene(script, facts, credit, bgmCredit, author, timeZone),

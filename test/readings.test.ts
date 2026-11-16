@@ -147,6 +147,14 @@ describe("speechUnits", () => {
       { at: "work.narration[2]", text: `${"い".repeat(30)}。` },
     ]);
   });
+
+  it("図解シーンの読み上げ文も、描画と同じ順(実施した作業の次)で含める", async () => {
+    const script = await loadScript();
+    script.figure = { type: "flow", title: "流れ", steps: [{ label: "受付" }, { label: "確認", changed: true }], narration: ["図の文です。"] };
+    const order = [...new Set(speechUnits(script).map((unit) => unit.at.split(".")[0]))];
+    expect(order).toEqual(["opening", "work", "figure", "verification", "decisions", "next_steps"]);
+    expect(speechUnits(script)).toContainEqual({ at: "figure.narration[0]", text: "図の文です。" });
+  });
 });
 
 /** 送られた文をそのまま読み(kana)として返す、偽の VOICEVOX エンジン */

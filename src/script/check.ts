@@ -1,7 +1,7 @@
 import type { SessionFacts } from "../facts.js";
 import { checkEndings, type Persona } from "../persona.js";
 import { LIMITS } from "./normalize.js";
-import type { VideoScript } from "./schema.js";
+import { FIGURE_LIMITS, type Figure, type VideoScript } from "./schema.js";
 
 /** 読み上げ文 1 文の長さの目安(全角)。字幕 1 枚に収まる */
 export const SENTENCE_LIMIT = 35;
@@ -73,10 +73,64 @@ function narrations(script: VideoScript): Array<{ at: string; lines: string[] }>
   return [
     { at: "opening.narration", lines: script.opening.narration },
     { at: "work.narration", lines: script.work.narration },
+    ...(script.figure ? [{ at: "figure.narration", lines: script.figure.narration }] : []),
     { at: "verification.narration", lines: script.verification.narration },
     { at: "decisions.narration", lines: script.decisions.narration },
     { at: "next_steps.narration", lines: script.next_steps.narration },
   ];
+}
+
+/** 図の中の文字。長さの上限は描画で縮小しないための値なので、少しでも超えたら警告する */
+function figureTexts(figure: Figure): Array<{ at: string; text: string; limit: number }> {
+  const head = { at: "figure.title", text: figure.title, limit: FIGURE_LIMITS.title };
+  if (figure.type === "before_after") {
+    return [
+      head,
+      ...figure.before.map((text, i) => ({ at: `figure.before[${i}]`, text, limit: FIGURE_LIMITS.sideText })),
+      ...figure.after.map((text, i) => ({ at: `figure.after[${i}]`, text, limit: FIGURE_LIMITS.sideText })),
+    ];
+  }
+  return [
+    head,
+    ...figure.steps.flatMap((step, i) => [
+      { at: `figure.steps[${i}].label`, text: step.label, limit: FIGURE_LIMITS.stepLabel },
+      ...(step.note === undefined ? [] : [{ at: `figure.steps[${i}].note`, text: step.note, limit: FIGURE_LIMITS.stepNote }]),
+    ]),
+  ];
+}
+
+/** 算用数字(半角・全角)。漢数字は「一覧」「一部」などの誤検出が多いので対象にしない */
+const DIGIT = /[0-9０-９]/;
+
+/** 図の形(件数・長さ・数字・変更した段)を確かめる */
+function checkFigure(figure: Figure): ScriptIssue[] {
+  const issues: ScriptIssue[] = [];
+  const count = (at: string, n: number, min: number, max: number, unit: string, dropped: string) => {
+    if (n < min) issues.push({ at, message: `${n} ${unit}です。${min}〜${max} ${unit}にしてください。${dropped}` });
+    else if (n > max) issues.push({ at, message: `${n} ${unit}あります。表示されるのは先頭の ${max} ${unit}だけです。` });
+  };
+  if (figure.type === "before_after") {
+    const empty = "変更前・変更後のどちらかが空だと、図解シーンは出ません。";
+    count("figure.before", figure.before.filter((t) => t.trim()).length, 1, FIGURE_LIMITS.sideLines, "行", empty);
+    count("figure.after", figure.after.filter((t) => t.trim()).length, 1, FIGURE_LIMITS.sideLines, "行", empty);
+  } else {
+    const steps = figure.steps.filter((step) => step.label.trim());
+    count("figure.steps", steps.length, FIGURE_LIMITS.minSteps, FIGURE_LIMITS.maxSteps, "段", "流れになりません。");
+    if (!steps.slice(0, FIGURE_LIMITS.maxSteps).some((step) => step.changed)) {
+      issues.push({ at: "figure.steps", message: "今回変更した段(changed: true)がありません。手を入れた段を示してください。" });
+    }
+  }
+  for (const { at, text, limit } of figureTexts(figure)) {
+    const length = text.trim().length;
+    if (length > limit) issues.push({ at, message: `${length} 文字あります(上限 ${limit} 文字)。図からはみ出します:「${text.trim()}」` });
+    if (DIGIT.test(text)) {
+      issues.push({
+        at,
+        message: `図に数字があります。図には数値を書かず、数値はログから集計した画面の数値に任せてください:「${text.trim()}」`,
+      });
+    }
+  }
+  return issues;
 }
 
 /** 画面に出る文字(口調を付けない部分) */
@@ -85,6 +139,7 @@ function screenTexts(script: VideoScript): Array<{ at: string; text: string; lim
     { at: "title", text: script.title, limit: SCREEN_LIMITS.title },
     { at: "headline", text: script.headline, limit: SCREEN_LIMITS.headline },
     ...script.work.items.map((text, i) => ({ at: `work.items[${i}]`, text, limit: SCREEN_LIMITS.item })),
+    ...(script.figure ? figureTexts(script.figure) : []),
     ...script.verification.items.map((item, i) => ({
       at: `verification.items[${i}].label`,
       text: item.label,
@@ -114,8 +169,9 @@ export function checkScript(script: VideoScript, options: CheckOptions): ScriptC
     narrationChars += spoken.reduce((n, line) => n + line.length, 0);
     if (spoken.length === 0) {
       issues.push({ at, message: "読み上げ文がありません。このシーンは読み上げも字幕もなくなります。" });
-    } else if (spoken.length > SENTENCES_PER_SCENE) {
-      issues.push({ at, message: `${spoken.length} 文あります。各シーン 1〜${SENTENCES_PER_SCENE} 文にしてください。` });
+    } else if (spoken.length > (at === "figure.narration" ? FIGURE_LIMITS.narration : SENTENCES_PER_SCENE)) {
+      const scene = at === "figure.narration" ? `図解シーンは 1〜${FIGURE_LIMITS.narration}` : `各シーン 1〜${SENTENCES_PER_SCENE}`;
+      issues.push({ at, message: `${spoken.length} 文あります。${scene} 文にしてください。` });
     }
     lines.forEach((line, i) => {
       const text = line.trim();
@@ -139,7 +195,8 @@ export function checkScript(script: VideoScript, options: CheckOptions): ScriptC
 
   for (const { at, text, limit } of screenTexts(script)) {
     const length = text.trim().length;
-    if (length > Math.round(limit * 1.25)) {
+    // 図の文字の長さは checkFigure で確かめる
+    if (!at.startsWith("figure.") && length > Math.round(limit * 1.25)) {
       issues.push({ at, message: `${length} 文字あります(目安 ${limit} 文字以内)。文字が小さく縮小されます:「${text.trim()}」` });
     }
     if (VIDEO_REQUEST.test(text)) issues.push({ at, message: `${VIDEO_REQUEST_MESSAGE}:「${text.trim()}」` });
@@ -154,6 +211,7 @@ export function checkScript(script: VideoScript, options: CheckOptions): ScriptC
       message: "「ご依頼の内容」のシーンはなくなったため、request は表示も読み上げもされません。削除してください。",
     });
   }
+  if (script.figure) issues.push(...checkFigure(script.figure));
 
   const counts: Array<[string, number, number]> = [
     ["work.items", script.work.items.length, LIMITS.work],

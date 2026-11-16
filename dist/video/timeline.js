@@ -1,5 +1,6 @@
 import { durationOf, mixInto, silence } from "../tts/wav.js";
-export const SCENE_KINDS = ["opening", "work", "verification", "decisions", "closing"];
+/** シーンの並び。figure(図解)は台本に figure があるときだけ入る */
+export const SCENE_KINDS = ["opening", "work", "figure", "verification", "decisions", "closing"];
 /** シーン開始から最初の読み上げまで。要素の登場アニメーションを見せる時間。 */
 const LEAD_IN = 0.5;
 /** 文と文の間。0.25 秒では間延びしたため詰めている */
@@ -38,11 +39,15 @@ export function sceneLines(script) {
     const narration = {
         opening: script.opening.narration,
         work: script.work.narration,
+        figure: script.figure?.narration,
         verification: script.verification.narration,
         decisions: script.decisions.narration,
         closing: script.next_steps.narration,
     };
-    return SCENE_KINDS.map((kind) => ({ kind, lines: narration[kind].flatMap((line) => splitCaption(line)) }));
+    return SCENE_KINDS.flatMap((kind) => {
+        const lines = narration[kind];
+        return lines ? [{ kind, lines: lines.flatMap((line) => splitCaption(line)) }] : [];
+    });
 }
 const round = (seconds) => Math.round(seconds * 1000) / 1000;
 function layout(scenes, clips) {

@@ -2,7 +2,8 @@ import type { VideoScript } from "../script/schema.js";
 import type { Synthesizer } from "../tts/types.js";
 import { durationOf, mixInto, type Pcm, silence } from "../tts/wav.js";
 
-export const SCENE_KINDS = ["opening", "work", "verification", "decisions", "closing"] as const;
+/** シーンの並び。figure(図解)は台本に figure があるときだけ入る */
+export const SCENE_KINDS = ["opening", "work", "figure", "verification", "decisions", "closing"] as const;
 export type SceneKind = (typeof SCENE_KINDS)[number];
 
 /** 字幕 1 枚分。start〜end は読み上げ音声が鳴っている区間(秒)。 */
@@ -67,14 +68,18 @@ export function splitCaption(text: string, max = CAPTION_MAX): string[] {
 }
 
 export function sceneLines(script: VideoScript): Array<{ kind: SceneKind; lines: string[] }> {
-  const narration: Record<SceneKind, string[]> = {
+  const narration: Record<SceneKind, string[] | undefined> = {
     opening: script.opening.narration,
     work: script.work.narration,
+    figure: script.figure?.narration,
     verification: script.verification.narration,
     decisions: script.decisions.narration,
     closing: script.next_steps.narration,
   };
-  return SCENE_KINDS.map((kind) => ({ kind, lines: narration[kind].flatMap((line) => splitCaption(line)) }));
+  return SCENE_KINDS.flatMap((kind) => {
+    const lines = narration[kind];
+    return lines ? [{ kind, lines: lines.flatMap((line) => splitCaption(line)) }] : [];
+  });
 }
 
 const round = (seconds: number) => Math.round(seconds * 1000) / 1000;

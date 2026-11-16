@@ -3,6 +3,7 @@ import { type BgmSetting, describeBgm, probeBgm } from "./audio/bgm.js";
 import type { SessionFacts } from "./facts.js";
 import type { Persona } from "./persona.js";
 import { narrationBudget, SENTENCE_LIMIT } from "./script/check.js";
+import { FIGURE_LIMITS as F } from "./script/schema.js";
 import { withVoicevoxStart } from "./tts/start.js";
 import { creditFor, VoicevoxClient } from "./tts/voicevox.js";
 import { formatDateTime } from "./util/time.js";
@@ -170,6 +171,12 @@ export function buildBrief(input: BriefInput): string {
     "",
     "## 長さ",
     `- narration は全シーン合計で全角 ${narrationBudget(input.seconds)} 文字程度(約 ${input.seconds} 秒)。1 文は ${SENTENCE_LIMIT} 文字以内、各シーン 1〜3 文。`,
+    "",
+    "## 図(任意)",
+    "- 文章だけでは伝わりにくい変化や流れがあるときだけ figure を書く。書くと「実施した作業」の次に図解シーンが入る。",
+    `- before_after(変化): 変更前・変更後 各 1〜${F.sideLines} 行、各全角 ${F.sideText} 文字以内`,
+    `- flow(流れ): ${F.minSteps}〜${F.maxSteps} 段、段の名前は全角 ${F.stepLabel} 文字以内、補足(note)は ${F.stepNote} 文字以内。今回変更した段に changed: true`,
+    `- 見出し(title)は全角 ${F.title} 文字以内、narration は 1〜${F.narration} 文。図に数字は書かない。`,
     "",
     "## 環境",
     ...input.environment.map((item) => `- ${item.name}: ${item.status === "ok" ? "" : "[不足] "}${item.detail}`),
