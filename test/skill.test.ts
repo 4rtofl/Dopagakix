@@ -39,6 +39,18 @@ describe("同梱のスキル", () => {
     expect(checkScript(script, { seconds: 60 }).issues).toEqual([]);
   });
 
+  it("図の例は 2 種類ともスキーマどおりで、台本に入れても check の警告が出ない", async () => {
+    const text = await readFile(skillFile, "utf8");
+    const blocks = [...text.matchAll(/```json\n([\s\S]*?)\n```/g)].map((m) => m[1]!);
+    const base = VideoScriptSchema.parse(JSON.parse(blocks[0]!));
+    const figures = blocks.filter((block) => block.startsWith('"figure"')).map((block) => JSON.parse(`{${block}}`).figure);
+    expect(figures.map((figure) => figure.type)).toEqual(["before_after", "flow"]);
+    for (const figure of figures) {
+      const script = VideoScriptSchema.parse({ ...base, figure });
+      expect(checkScript(script, { seconds: 60 }).issues).toEqual([]);
+    }
+  });
+
   it("手順で使うコマンドは CLI に実在する", async () => {
     const text = await readFile(skillFile, "utf8");
     const used = new Set([...text.matchAll(/`dopagakix ([a-z-]+)/g)].map((m) => m[1]));

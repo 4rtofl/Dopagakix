@@ -6,6 +6,47 @@ export const CHECK_RESULTS = ["pass", "fail", "not_run"];
 const Narration = z
     .array(z.string())
     .describe("このシーンの読み上げ文。字幕にもそのまま表示する。1要素=1文、1〜3文。");
+export const FIGURE_TYPES = ["before_after", "flow"];
+/**
+ * 図の中身の上限。スマートフォンで数秒見て読め、縮小なしで本文枠に収まる量。
+ * 形式の誤りでない限り読み込みは通し、超えた分は check で警告し、表示では切り捨てる。
+ */
+export const FIGURE_LIMITS = {
+    title: 20,
+    /** before_after の変更前・変更後それぞれの行数と、1 行の文字数 */
+    sideLines: 3,
+    sideText: 16,
+    /** flow の段の数(最小・最大)と、段の名前・補足の文字数 */
+    minSteps: 2,
+    maxSteps: 5,
+    stepLabel: 12,
+    stepNote: 16,
+    /** 読み上げ文の数 */
+    narration: 2,
+};
+const FigureNarration = z.array(z.string()).describe("図解シーンの読み上げ文。字幕にもそのまま表示する。1要素=1文、1〜2文。");
+const FigureTitle = z.string().describe(`図の見出し(全角${FIGURE_LIMITS.title}文字以内)`);
+const BeforeAfterFigure = z.object({
+    type: z.literal("before_after").describe("振る舞いや構成の変化"),
+    title: FigureTitle,
+    before: z.array(z.string()).describe(`変更前。1〜${FIGURE_LIMITS.sideLines}行、各全角${FIGURE_LIMITS.sideText}文字以内`),
+    after: z.array(z.string()).describe(`変更後。1〜${FIGURE_LIMITS.sideLines}行、各全角${FIGURE_LIMITS.sideText}文字以内`),
+    narration: FigureNarration,
+});
+const FlowFigure = z.object({
+    type: z.literal("flow").describe("処理や手順の流れと、今回手を入れた箇所"),
+    title: FigureTitle,
+    steps: z
+        .array(z.object({
+        label: z.string().describe(`段の名前(全角${FIGURE_LIMITS.stepLabel}文字以内)`),
+        note: z.string().optional().describe(`補足(全角${FIGURE_LIMITS.stepNote}文字以内)`),
+        changed: z.boolean().optional().describe("今回変更した段なら true"),
+    }))
+        .describe(`上から順の段。${FIGURE_LIMITS.minSteps}〜${FIGURE_LIMITS.maxSteps}段。変更した段を1つ以上含める`),
+    narration: FigureNarration,
+});
+/** 図解シーンの中身。配置と描画は dopagakix が受け持つ。数値の欄は設けない(数値はログから集計したものだけを出す) */
+export const FigureSchema = z.discriminatedUnion("type", [BeforeAfterFigure, FlowFigure]);
 /**
  * 動画の台本。作業をしたエージェント自身が書く(report.json)。画面に出す数値
  * (変更ファイル数など)はここに含めず、ログから機械的に集計した SessionFacts を使う。
@@ -25,6 +66,7 @@ export const VideoScriptSchema = z.object({
         items: z.array(z.string()).describe("実施した主な作業。成果ベースで最大5件、各全角28文字以内"),
         narration: Narration,
     }),
+    figure: FigureSchema.optional().describe("任意。文章だけでは伝わりにくい変化や流れを図で示す。書くと「実施した作業」の次に図解シーンが入る"),
     verification: z.object({
         items: z
             .array(z.object({
