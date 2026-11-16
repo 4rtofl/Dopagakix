@@ -47,6 +47,10 @@ export const VideoScriptSchema = z.object({
         items: z.array(z.string()).describe("次にやるべきこと。最大3件、各全角28文字以内"),
         narration: Narration,
     }),
+    readings: z
+        .record(z.string().min(1, "表記が空です"), z.string().min(1, "読みが空です"))
+        .optional()
+        .describe("読みの指定(表記 → 読み)。VOICEVOX に送る文だけを置き換え、字幕と画面の文字は元の表記のままにする"),
 });
 export const AUTHORS = ["agent", "manual"];
 /**
@@ -66,6 +70,8 @@ export const ScriptFileSchema = z.object({
         .optional(),
     /** 効果音の設定。描画し直すときも同じ効果音を使う(オプションや環境変数で指定すればそちらを優先) */
     sfx: z.object({ dir: z.string(), credit: z.string().optional(), volume: z.number() }).optional(),
+    /** 描画に使った読みの指定(組み込み・プロジェクト・台本を合わせた結果)。描画し直しても同じ読みにする */
+    readings: VideoScriptSchema.shape.readings,
     facts: SessionFactsSchema,
     script: VideoScriptSchema,
 });

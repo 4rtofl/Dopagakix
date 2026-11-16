@@ -112,11 +112,15 @@ jobs:
           npx playwright-core install --with-deps --only-shell chromium
       - name: 実エンジンを使うテスト
         # 効果音付きの動画で、効果音が決めた時刻に鳴り、読み上げと重ならないことも確かめる(test/sfx.test.ts)
-        run: npx vitest run test/tts.test.ts test/environment.test.ts test/sfx.test.ts
+        run: npx vitest run test/tts.test.ts test/readings.test.ts test/cli.test.ts test/environment.test.ts test/sfx.test.ts
       - name: 読み上げ付きの動画を作る
         run: |
           out="$RUNNER_TEMP/voiced/summary.mp4"
-          node dist/cli.js render examples/script.example.json --fps 4 -o "$out"
+          # render は check で確かめた読みでだけ音声を作るため、台本を作業場所に写して先に check する
+          mkdir -p "$RUNNER_TEMP/voiced"
+          cp examples/script.example.json "$RUNNER_TEMP/voiced/script.json"
+          node dist/cli.js check "$RUNNER_TEMP/voiced/script.json"
+          node dist/cli.js render "$RUNNER_TEMP/voiced/script.json" --fps 4 -o "$out"
           audio=$(ffprobe -v error -select_streams a -show_entries stream=codec_name -of csv=p=0 "$out")
           echo "音声: $audio"
           test "$audio" = "aac"
