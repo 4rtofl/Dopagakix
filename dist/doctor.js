@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { resolvePersona } from "./persona.js";
-import { SILENT_DBFS } from "./pipeline.js";
+import { resolveVideoDir, SILENT_DBFS } from "./pipeline.js";
 import { changedSkillFiles, SKILL_NAME, skillsDir } from "./skill.js";
 import { CURRENT_SESSION_ENV, claudeConfigDir, listTranscripts } from "./transcript/locate.js";
 import { withVoicevoxStart } from "./tts/start.js";
@@ -56,6 +56,22 @@ const CHROMIUM_FIX = "npx playwright-core install --only-shell chromium";
 const chromiumFix = (explicit, fix) => explicit ? `指定したパス(--chromium または DOPAGAKIX_CHROMIUM)を確かめてください。指定しない場合は ${fix} で入れたものを使います` : fix;
 const ENGINE_FIX = "VOICEVOX ENGINE を起動してください(Docker なら docker run -d --name voicevox -p 127.0.0.1:50021:50021 voicevox/voicevox_engine:cpu-latest、" +
     "作成済みのコンテナなら docker start voicevox)。別の場所のエンジンを使う場合は VOICEVOX_URL を設定します";
+/**
+ * ディレクトリに書き込めるか。まだない場合は、作る予定の場所のうち、既にある最も近い親で判定する(作りはしない)。
+ * 書き込めなければ undefined
+ */
+async function writableDetail(dir, probes) {
+    let existing = dir;
+    while (!existsSync(existing) && path.dirname(existing) !== existing)
+        existing = path.dirname(existing);
+    try {
+        await probes.writable(existing);
+    }
+    catch {
+        return undefined;
+    }
+    return existing === dir ? `${dir}(書き込めます)` : `${dir}(まだありません。${existing} に作れます)`;
+}
 const UNVERIFIED = { status: "warn", detail: "確かめていません(VOICEVOX ENGINE に接続できないため)" };
 export const CHECKS = [
     {
@@ -292,17 +308,28 @@ export const CHECKS = [
         name: "出力先",
         run: async ({ options, probes }) => {
             const dir = path.resolve(options.outDir);
-            // まだない場合は、作る予定の場所のうち、既にある最も近い親で判定する(作りはしない)
-            let existing = dir;
-            while (!existsSync(existing) && path.dirname(existing) !== existing)
-                existing = path.dirname(existing);
-            try {
-                await probes.writable(existing);
-            }
-            catch {
-                return { status: "error", detail: `${dir} に書き込めません(${existing})`, fix: "書き込める場所を prepare の --out-dir で指定してください" };
-            }
-            return { status: "ok", detail: existing === dir ? `${dir}(書き込めます)` : `${dir}(まだありません。${existing} に作れます)` };
+            const detail = await writableDetail(dir, probes);
+            return detail
+                ? { status: "ok", detail }
+                : { status: "error", detail: `${dir} に書き込めません`, fix: "書き込める場所を prepare の --out-dir で指定してください" };
+        },
+    },
+    {
+        id: "videoDir",
+        group: "出力",
+        name: "動画の保存先",
+        run: async ({ options, probes }) => {
+            if (!options.videoDir)
+                return { status: "ok", detail: "未設定(動画も出力先に置きます)" };
+            const dir = resolveVideoDir(options.videoDir);
+            const detail = await writableDetail(dir, probes);
+            return detail
+                ? { status: "ok", detail }
+                : {
+                    status: "error",
+                    detail: `${dir} に書き込めません`,
+                    fix: "書き込める場所を --video-dir か DOPAGAKIX_VIDEO_DIR で指定してください(保存先を使わない場合は DOPAGAKIX_VIDEO_DIR の設定を消します)",
+                };
         },
     },
     {
@@ -320,8 +347,8 @@ export const CHECKS = [
         }),
     },
 ];
-/** prepare の「環境」で確かめるもの(描画に必要なもの) */
-export const PREPARE_CHECKS = ["ffmpeg", "chromium", "fonts", "voicevox", "speaker"];
+/** prepare の「環境」で確かめるもの(描画に必要なもの。動画の保存先は描画の最後に書き込むため、先に確かめる) */
+export const PREPARE_CHECKS = ["ffmpeg", "chromium", "fonts", "voicevox", "speaker", "videoDir"];
 /** 確認を順に実行する。ids を渡すとその確認だけを行う */
 export async function runChecks(options, ids) {
     const probes = { ...defaultProbes, ...options.probes };

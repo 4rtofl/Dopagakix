@@ -142,6 +142,7 @@ describe("runChecks", () => {
       "transcripts",
       "session",
       "output",
+      "videoDir",
       "settings",
     ]);
     expect(results.filter((result) => result.status !== "ok")).toEqual([]);
@@ -152,6 +153,7 @@ describe("runChecks", () => {
     expect(byId(results, "transcripts")?.detail).toMatch(/^1 件/);
     expect(byId(results, "session")?.detail).toContain("あり(11111111");
     expect(byId(results, "output")?.detail).toContain("まだありません");
+    expect(byId(results, "videoDir")?.detail).toBe("未設定(動画も出力先に置きます)");
     expect(byId(results, "settings")?.detail).toBe("VOICEVOX_URL: http://127.0.0.1:59999(オプションで指定)\nTZ: 未設定(実行環境の設定)");
   });
 
@@ -203,6 +205,23 @@ describe("runChecks", () => {
       },
     });
     expect(byId(readOnly, "output")).toMatchObject({ status: "error", fix: expect.stringContaining("--out-dir") });
+
+    // 動画の保存先は、出力先とは別に確かめる(~ はホームフォルダに置き換える)
+    const videos = path.join(os.homedir(), "no-such-dopagakix-videos");
+    const readOnlyVideos = await check(
+      {
+        writable: async (dir) => {
+          if (path.resolve(dir) !== path.resolve(project)) throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+        },
+      },
+      { videoDir: "~/no-such-dopagakix-videos" },
+    );
+    expect(byId(readOnlyVideos, "output")?.status).toBe("ok");
+    expect(byId(readOnlyVideos, "videoDir")).toMatchObject({
+      status: "error",
+      detail: `${videos} に書き込めません`,
+      fix: expect.stringContaining("DOPAGAKIX_VIDEO_DIR"),
+    });
   });
 
   it("導入済みのスキルが同梱版と違えば、エラーではなく注意を出す", async () => {
@@ -228,7 +247,8 @@ describe("runChecks", () => {
   it("何も変更しない(問い合わせは読むだけ、出力先も作らない、エンジンも起動しない)", async () => {
     const { probes, requests } = healthy();
     const outDir = path.join(root, "not-created", "dopagakix-out");
-    await runChecks(options({ probes, outDir }));
+    const results = await runChecks(options({ probes, outDir, videoDir: path.join(root, "not-created", "videos") }));
+    expect(byId(results, "videoDir")?.detail).toContain("まだありません");
     expect(requests.every((request) => request.method === "GET")).toBe(true);
     expect(new Set(requests.map((request) => request.path))).toEqual(new Set(["/version", "/speakers"]));
     expect(existsSync(path.join(root, "not-created"))).toBe(false);
@@ -245,7 +265,7 @@ describe("runChecks", () => {
     const extra = { speaker: 99, probes: healthy({ nodeVersion: "20.0.0" }).probes };
     const all = await runChecks(options(extra));
     const prepared = await runChecks(options(extra), PREPARE_CHECKS);
-    expect(prepared.map((result) => result.id)).toEqual(["ffmpeg", "chromium", "fonts", "voicevox", "speaker"]);
+    expect(prepared.map((result) => result.id)).toEqual(["ffmpeg", "chromium", "fonts", "voicevox", "speaker", "videoDir"]);
     expect(prepared).toEqual(all.filter((result) => PREPARE_CHECKS.includes(result.id)));
   });
 

@@ -101,7 +101,7 @@ dopagakix doctor --synth   # VOICEVOX で短い文を実際に合成して確か
 | 描画 | ffmpeg(libx264 と aac のエンコーダがあるか)、Chromium(起動できるか)、フォント |
 | 読み上げ | VOICEVOX ENGINE(接続と版)、話者(ID・クレジット表記・口調)、`--synth` なら実際の合成と所要時間 |
 | Claude Code | スキル(導入されているか、同梱版と同じか)、プロジェクトのセッションログ、実行中のセッション |
-| 出力 | 出力先(`dopagakix-out`)に書き込めるか |
+| 出力 | 出力先(`dopagakix-out`)と、設定していれば動画の保存先(`DOPAGAKIX_VIDEO_DIR`)に書き込めるか |
 | 設定 | 有効な設定(環境変数)の値と出どころ |
 
 `--json` を付けると、項目ごとの `{ "id", "group", "status", "detail", "fix" }` を JSON の配列で出します(`status` は `ok` / `warn` / `error`)。`--no-voice` を付けると読み上げの確認を省きます。`prepare` の「環境」も同じ確認を使います。
@@ -236,7 +236,7 @@ Claude Code で作業を終えたら、「動画で報告して」「動画に�
 | `--speed <x>` | `1.25` | 話速(`render` のみ。ずんだもんの実測で約 7.3 文字/秒) |
 | `--timezone <tz>` | 実行環境の設定 | 画面の日時表示に使います |
 | `--out-dir <dir>` | `dopagakix-out` | 出力先の親ディレクトリ(`prepare` のみ) |
-| `--video-dir <dir>` | (なし) | 完成した動画だけを置くフォルダ(`prepare` / `render`)。環境変数 `DOPAGAKIX_VIDEO_DIR` でも可 |
+| `--video-dir <dir>` | (なし) | 完成した動画だけを置くフォルダ(`prepare` / `render` / `doctor`)。環境変数 `DOPAGAKIX_VIDEO_DIR` でも可 |
 | `-o, --out <file>` | 台本と同じ場所の `summary.mp4` | 動画の出力先(`render` のみ)。作業ファイルも同じ場所に置き、`--video-dir` より優先します |
 
 `prepare` に付けたオプションは、`prepare` が表示する `check` / `render` のコマンドにも引き継がれます。

@@ -88,4 +88,13 @@ describe("CLI: doctor", () => {
     expect(items.map((item) => item.id)).not.toContain("voicevox");
     expect(result.code).toBe(items.some((item) => item.status === "error") ? 1 : 0);
   });
+
+  it("動画の保存先(DOPAGAKIX_VIDEO_DIR)に書き込めるかを確かめ、設定の一覧に出す。保存先は作らない", async () => {
+    const videos = path.join(dir, "videos");
+    const result = await run(["doctor", "--no-voice", "--json"], { DOPAGAKIX_VIDEO_DIR: videos });
+    const items = JSON.parse(result.stdout) as Array<{ id: string; status: string; detail: string }>;
+    expect(items.find((item) => item.id === "videoDir")).toMatchObject({ status: "ok", detail: `${videos}(まだありません。${dir} に作れます)` });
+    expect(items.find((item) => item.id === "settings")?.detail).toContain(`DOPAGAKIX_VIDEO_DIR: ${videos}(環境変数)`);
+    expect(existsSync(videos)).toBe(false);
+  });
 });

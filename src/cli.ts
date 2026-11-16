@@ -389,13 +389,15 @@ withSessionOptions(program.command("digest").description("セッションログ�
     }
   });
 
-type DoctorFlags = VoiceFlags & { project: string; credit?: string; chromium?: string; synth?: boolean; json?: boolean };
+type DoctorFlags = VoiceFlags & { project: string; credit?: string; videoDir?: string; chromium?: string; synth?: boolean; json?: boolean };
 
-withCreditOption(
-  withVoiceOptions(
-    program
-      .command("doctor")
-      .description("動画の作成に必要なもの(描画・読み上げ・Claude Code との連携)がそろっているかを確かめ、足りないものと対処を表示する。何も変更しない"),
+withVideoDirOption(
+  withCreditOption(
+    withVoiceOptions(
+      program
+        .command("doctor")
+        .description("動画の作成に必要なもの(描画・読み上げ・Claude Code との連携)がそろっているかを確かめ、足りないものと対処を表示する。何も変更しない"),
+    ),
   ),
 )
   .option("-p, --project <dir>", "スキルとセッションログを確かめるプロジェクトのディレクトリ", process.cwd())
@@ -414,6 +416,7 @@ withCreditOption(
       { name: "DOPAGAKIX_SPEAKER", value: String(flags.speaker), source: source("speaker") },
       { name: "DOPAGAKIX_PERSONA", value: flags.persona, source: source("persona") },
       { name: "DOPAGAKIX_CREDIT", value: flags.credit, source: source("credit"), unset: "話者から決める" },
+      { name: "DOPAGAKIX_VIDEO_DIR", value: flags.videoDir, source: source("videoDir"), unset: "動画も出力先に置く" },
       flags.chromium ? { name: "DOPAGAKIX_CHROMIUM", value: flags.chromium, source: "option" } : fromEnv("DOPAGAKIX_CHROMIUM", "自動で探す"),
       fromEnv("DOPAGAKIX_VOICEVOX_START", "起動しない"),
       fromEnv("DOPAGAKIX_REQUIRE_VOICE", "--no-voice を許す"),
