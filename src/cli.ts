@@ -4,6 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { Command, InvalidArgumentError, Option } from "commander";
+import { describeSfx, parseSfxVolume, probeSfx, resolveSfx, type SfxFlags } from "./audio/sfx.js";
 import { buildBrief, checkEnvironment } from "./brief.js";
 import { type Persona, personaMismatch, resolvePersona } from "./persona.js";
 import {
@@ -115,6 +116,26 @@ function withVideoDirOption(command: Command): Command {
   );
 }
 
+function sfxVolume(value: string): number {
+  try {
+    return parseSfxVolume(value);
+  } catch {
+    throw new InvalidArgumentError("dB の数値を指定してください(例: -6)。");
+  }
+}
+
+/** 効果音の設定。環境変数と script.json の記録は resolveSfx で扱う(優先順位: オプション > 環境変数 > script.json) */
+function withSfxOptions(command: Command): Command {
+  return command
+    .option(
+      "--sfx-dir <dir>",
+      "効果音のファイル(page.* / result.* / end.*)を置いたディレクトリ。環境変数 DOPAGAKIX_SFX_DIR でも可。音源は同梱しないので、利用者が用意する",
+    )
+    .option("--no-sfx", "効果音を付けない(環境変数や script.json で設定していても)")
+    .option("--sfx-credit <text>", "効果音のクレジット。最終ページにそのまま表示する(例: 効果音：効果音ラボ)。環境変数 DOPAGAKIX_SFX_CREDIT でも可")
+    .option("--sfx-volume <dB>", "効果音の音量。基準(ピーク -12 dBFS)からの増減。環境変数 DOPAGAKIX_SFX_VOLUME でも可(既定: 0)", sfxVolume);
+}
+
 function withSecondsOption(command: Command): Command {
   return command.option("--seconds <n>", "動画の長さの目安(秒)。読み上げ文の文字数の目安と、話速の調整に使う", positiveNumber, DEFAULT_SECONDS);
 }
@@ -166,11 +187,15 @@ function explicitArgs(command: Command, flags: object, keys: string[]): string[]
   const args: string[] = [];
   for (const key of keys) {
     if (command.getOptionValueSource(key) !== "cli") continue;
-    if (key === "voice") {
-      if (values.voice === false) args.push("--no-voice");
+    const flag = `--${key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`;
+    const value = values[key];
+    if (typeof value === "boolean") {
+      if (value === false) args.push(flag.replace(/^--/, "--no-"));
       continue;
     }
-    args.push(`--${key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`, String(values[key]));
+    // 負の数(--bgm-volume -6 など)も 1 つの引数で渡す
+    if (typeof value === "number") args.push(`${flag}=${value}`);
+    else args.push(flag, String(value));
   }
   return args;
 }
@@ -182,16 +207,19 @@ const program = new Command()
   .hook("preAction", (_program, action) => assertVoiceAllowed(action.opts<{ voice?: boolean }>().voice));
 
 type PrepareFlags = SessionFlags &
-  VoiceFlags & { credit?: string; videoDir?: string; seconds: number; outDir: string; timezone?: string; chromium?: string };
+  VoiceFlags &
+  SfxFlags & { credit?: string; videoDir?: string; seconds: number; outDir: string; timezone?: string; chromium?: string };
 
-withVideoDirOption(
-  withCreditOption(
-    withSecondsOption(
-      withVoiceOptions(
-        withSessionOptions(
-          program
-            .command("prepare")
-            .description("動画レポートの準備。出力先を作り、台本を書くのに必要な情報(画面に出る数値・口調・長さ・環境)を表示する"),
+withSfxOptions(
+  withVideoDirOption(
+    withCreditOption(
+      withSecondsOption(
+        withVoiceOptions(
+          withSessionOptions(
+            program
+              .command("prepare")
+              .description("動画レポートの準備。出力先を作り、台本を書くのに必要な情報(画面に出る数値・口調・長さ・環境)を表示する"),
+          ),
         ),
       ),
     ),
@@ -205,7 +233,12 @@ withVideoDirOption(
     const loaded = await loadSession(locateOptions(flags), [outRoot]);
     log(`ログ: ${loaded.file}(${FOUND_BY[loaded.how]})`);
     // 口調は話者名から決めるため、エンジンを起動する場合は先に起動しておく
-    const environment = await checkEnvironment({ ...flags, startCommand: engineStart.command, onStart: engineStart.onStart });
+    const environment = await checkEnvironment({
+      ...flags,
+      sfx: resolveSfx(flags),
+      startCommand: engineStart.command,
+      onStart: engineStart.onStart,
+    });
     const persona = await choosePersona(flags);
 
     await prepareOutputRoot(outRoot);
@@ -227,7 +260,7 @@ withVideoDirOption(
           report,
           ...shared,
           ...timezone,
-          ...explicitArgs(command, flags, ["credit", "chromium", "videoDir"]),
+          ...explicitArgs(command, flags, ["credit", "chromium", "videoDir", "sfx", "sfxDir", "sfxCredit", "sfxVolume"]),
         ]),
         digestCommand: commandLine(["dopagakix", "digest", ...session, ...timezone, "-o", displayPath(path.join(runDir, "digest.md"))]),
         persona,
@@ -278,18 +311,21 @@ withSecondsOption(
 
 type RenderCommandFlags = SessionFlags &
   VoiceFlags &
-  RenderFlags & { credit?: string; out?: string; videoDir?: string; seconds: number; timezone?: string };
+  RenderFlags &
+  SfxFlags & { credit?: string; out?: string; videoDir?: string; seconds: number; timezone?: string };
 
-withVideoDirOption(
-  withCreditOption(
-    withRenderOptions(
-      withSecondsOption(
-        withVoiceOptions(
-          withSessionOptions(
-            program
-              .command("render")
-              .description("台本から動画を作る。画面の数値はセッションログから集計する")
-              .argument("<report>", "台本(report.json)、または描画済みの script.json(記録された数値で描画し直す)"),
+withSfxOptions(
+  withVideoDirOption(
+    withCreditOption(
+      withRenderOptions(
+        withSecondsOption(
+          withVoiceOptions(
+            withSessionOptions(
+              program
+                .command("render")
+                .description("台本から動画を作る。画面の数値はセッションログから集計する")
+                .argument("<report>", "台本(report.json)、または描画済みの script.json(記録された数値で描画し直す)"),
+            ),
           ),
         ),
       ),
@@ -308,6 +344,11 @@ withVideoDirOption(
       facts = loaded.facts;
       log(`ログ: ${loaded.file}(${FOUND_BY[loaded.how]})`);
     }
+
+    // 効果音のファイルが無い・読めない場合は、時間のかかる音声合成と描画の前に止める
+    const sfxSetting = resolveSfx(flags, process.env, report.sfx);
+    const sfx = sfxSetting ? await probeSfx(sfxSetting) : undefined;
+    log(`効果音: ${sfx ? describeSfx(sfx) : "なし"}`);
 
     // 読み上げありで VOICEVOX に接続できなければ、ここで止める(字幕のみには切り替えない)
     const synth = await createSynthesizer({ ...flags, startCommand: engineStart.command, onStart: engineStart.onStart });
@@ -335,6 +376,7 @@ withVideoDirOption(
         facts,
         author: report.author,
         persona: persona ? { id: persona.id, name: persona.name } : report.persona,
+        sfx,
       },
       {
         outFile,

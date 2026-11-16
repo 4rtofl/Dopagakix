@@ -64,6 +64,8 @@ export const ScriptFileSchema = z.object({
     voice: z
         .object({ enabled: z.boolean(), speaker: z.number().int().optional(), name: z.string().optional(), style: z.string().optional() })
         .optional(),
+    /** 効果音の設定。描画し直すときも同じ効果音を使う(オプションや環境変数で指定すればそちらを優先) */
+    sfx: z.object({ dir: z.string(), credit: z.string().optional(), volume: z.number() }).optional(),
     facts: SessionFactsSchema,
     script: VideoScriptSchema,
 });

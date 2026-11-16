@@ -11,6 +11,8 @@ export interface TemplateInput {
   facts: SessionFacts;
   scenes: TimedScene[];
   credit?: string;
+  /** 効果音のクレジット。最終ページにそのまま表示する */
+  sfxCredit?: string;
   /** 読み上げなし(字幕のみ)。柱に「音声なし」と出し、無音が意図したものだと分かるようにする */
   silent?: boolean;
   /** 台本の書き手。agent なら作業をした AI エージェント自身 */
@@ -81,6 +83,17 @@ function titleClass(title: string): string {
   return length <= 8 ? "title" : length <= 20 ? "title mid" : "title long";
 }
 
+/** 要素の登場の遅延(秒)。登場順 i の要素は i * ENTER_STEP + ENTER_OFFSET 秒後に現れ始める */
+const ENTER_STEP = 0.07;
+const ENTER_OFFSET = 0.06;
+const enterDelay = (i: number) => Math.round((i * ENTER_STEP + ENTER_OFFSET) * 1000) / 1000;
+/** 表紙の「結果」の行の登場順 */
+const RESULT_ROW = 2;
+/** 表紙で「結果」の行が現れる時刻(シーン開始からの秒数。効果音を鳴らす時刻) */
+export const RESULT_ROW_DELAY = enterDelay(RESULT_ROW);
+/** 最終ページで「以上」が現れる時刻(シーン開始からの秒数。次のステップの件数で変わる) */
+export const endMarkDelay = (nextSteps: number) => enterDelay(nextSteps + 1);
+
 /** 要素の登場順(アニメーションの遅延)を付ける */
 const enter = (cls: string, i: number) => `class="enter ${cls}" style="--i:${i}"`;
 
@@ -104,7 +117,7 @@ function openingScene(script: VideoScript, facts: SessionFacts, timeZone?: strin
     <h1 ${enter(titleClass(script.title), 0)}>${escapeHtml(script.title)}</h1>
     <div class="facts">
       <div class="rule rule-in" style="--i:1"></div>
-      <div ${enter("fact-row result", 2)} style="--i:2; --status:${status.color}">
+      <div ${enter("fact-row result", RESULT_ROW)} style="--i:${RESULT_ROW}; --status:${status.color}">
         <div class="fact-label">結果</div>
         <div class="fact-body">
           <div class="result-line"><span class="mark">${status.mark}</span>${escapeHtml(status.label)}</div>
@@ -196,6 +209,7 @@ function closingScene(
   script: VideoScript,
   facts: SessionFacts,
   credit: string | undefined,
+  sfxCredit: string | undefined,
   author: Author,
   timeZone?: string,
 ): string {
@@ -212,6 +226,7 @@ function closingScene(
       ? `報告: 作業をした AI エージェント${models}による自己報告。数値はセッションログから自動集計`
       : "報告: 手動で作成。数値はセッションログから自動集計",
     credit ? `音声: ${credit}` : undefined,
+    sfxCredit,
     `セッション ${facts.sessionId?.slice(0, 8) ?? "-"} ・ ${formatDateTime(facts.endTime, timeZone) || "-"}`,
   ]
     .filter(Boolean)
@@ -267,7 +282,7 @@ main { position: absolute; top: 230px; left: 80px; right: 80px; height: 1180px; 
 /* --u は文字や余白の単位。内容があふれるシーンでは小さくする */
 .content { --u: calc(var(--s, 1) * 1px); display: flex; flex-direction: column; gap: calc(40 * var(--u)); }
 
-.enter { animation: rise 0.38s cubic-bezier(0.2, 0, 0, 1) both; animation-delay: calc(var(--i, 0) * 0.07s + 0.06s); }
+.enter { animation: rise 0.38s cubic-bezier(0.2, 0, 0, 1) both; animation-delay: calc(var(--i, 0) * ${ENTER_STEP}s + ${ENTER_OFFSET}s); }
 @keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
 .rule { height: 0; border-top: 2px solid var(--ink); }
 .rule.thin { border-top: 1px solid var(--rule); }
@@ -456,14 +471,14 @@ const PAGE_SCRIPT = String.raw`
 
 /** 動画 1 本分のページを作る。フォントは /fonts/ 以下から読み込む前提。 */
 export function buildHtml(input: TemplateInput): string {
-  const { script, facts, scenes, credit, silent, author, timeZone } = input;
+  const { script, facts, scenes, credit, sfxCredit, silent, author, timeZone } = input;
   const bodies = {
     opening: openingScene(script, facts, timeZone),
     request: requestScene(script, facts),
     work: workScene(script, facts),
     verification: verificationScene(script),
     decisions: decisionsScene(script),
-    closing: closingScene(script, facts, credit, author, timeZone),
+    closing: closingScene(script, facts, credit, sfxCredit, author, timeZone),
   };
   const sections = scenes
     .map((scene) => `<section class="scene" data-kind="${scene.kind}"><div class="content">${bodies[scene.kind]}</div></section>`)

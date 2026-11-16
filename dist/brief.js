@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { describeSfx, probeSfx } from "./audio/sfx.js";
 import { narrationBudget, SENTENCE_LIMIT } from "./script/check.js";
 import { withVoicevoxStart } from "./tts/start.js";
 import { creditFor, VoicevoxClient } from "./tts/voicevox.js";
@@ -48,7 +49,19 @@ export async function checkEnvironment(options) {
     items.push(probe.status === 0
         ? { name: "ffmpeg", status: "ok", detail: probe.stdout.split("\n")[0].trim() }
         : { name: "ffmpeg", status: "missing", detail: `${ffmpeg} を実行できません。ffmpeg をインストールしてください` });
+    items.push(await sfxItem(options.sfx));
     return items;
+}
+/** 効果音の状態。設定したディレクトリやファイルが無い・読めない場合は、描画できないので不足とする */
+async function sfxItem(sfx) {
+    if (!sfx)
+        return { name: "効果音", status: "ok", detail: "なし" };
+    try {
+        return { name: "効果音", status: "ok", detail: describeSfx(await probeSfx(sfx)) };
+    }
+    catch (error) {
+        return { name: "効果音", status: "missing", detail: error.message.replaceAll("\n", " ") };
+    }
 }
 function formatMinutes(minutes) {
     if (minutes === undefined)

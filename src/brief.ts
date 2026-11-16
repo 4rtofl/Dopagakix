@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { describeSfx, probeSfx, type SfxSetting } from "./audio/sfx.js";
 import type { SessionFacts } from "./facts.js";
 import type { Persona } from "./persona.js";
 import { narrationBudget, SENTENCE_LIMIT } from "./script/check.js";
@@ -21,6 +22,8 @@ export interface EnvironmentOptions {
   /** クレジット表記の指定(省略時は話者から決める) */
   credit?: string;
   chromium?: string;
+  /** 効果音の設定(なければ効果音なし) */
+  sfx?: SfxSetting;
   /** 接続できないときに実行するエンジンの起動コマンド(環境変数 DOPAGAKIX_VOICEVOX_START) */
   startCommand?: string;
   /** 起動コマンドを実行する直前に呼ぶ(応答を待つ間の表示用) */
@@ -74,7 +77,18 @@ export async function checkEnvironment(options: EnvironmentOptions): Promise<Env
       ? { name: "ffmpeg", status: "ok", detail: probe.stdout.split("\n")[0]!.trim() }
       : { name: "ffmpeg", status: "missing", detail: `${ffmpeg} を実行できません。ffmpeg をインストールしてください` },
   );
+  items.push(await sfxItem(options.sfx));
   return items;
+}
+
+/** 効果音の状態。設定したディレクトリやファイルが無い・読めない場合は、描画できないので不足とする */
+async function sfxItem(sfx: SfxSetting | undefined): Promise<EnvironmentItem> {
+  if (!sfx) return { name: "効果音", status: "ok", detail: "なし" };
+  try {
+    return { name: "効果音", status: "ok", detail: describeSfx(await probeSfx(sfx)) };
+  } catch (error) {
+    return { name: "効果音", status: "missing", detail: (error as Error).message.replaceAll("\n", " ") };
+  }
 }
 
 function formatMinutes(minutes: number | undefined): string {
