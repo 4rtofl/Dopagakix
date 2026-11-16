@@ -3,6 +3,8 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
+import { conversationNarrations } from "../conversation/normalize.js";
+import type { ConversationScript } from "../conversation/schema.js";
 import { cleanText } from "./normalize.js";
 import { type VideoScript, VideoScriptSchema } from "./schema.js";
 import { splitCaption } from "../video/timeline.js";
@@ -157,6 +159,18 @@ export function speechUnits(script: VideoScript): SpeechUnit[] {
   ]);
 }
 
+/** 会話の要約の台本の読み上げ文を、描画のときに音声を作るのと同じ単位にする。at は台本(script)の中の位置 */
+export function conversationSpeechUnits(script: ConversationScript): SpeechUnit[] {
+  return conversationNarrations(script).flatMap(({ at, lines }) =>
+    lines.flatMap((line, i) => splitCaption(line).map((text) => ({ at: `${at}[${i}]`, text }))),
+  );
+}
+
+/** 会話の要約の台本の、シーンごとの読み上げ文(字幕 1 枚ごとに分けたもの)。描画の順 */
+export function conversationSceneLines(script: ConversationScript): Array<{ kind: ReturnType<typeof conversationNarrations>[number]["kind"]; lines: string[] }> {
+  return conversationNarrations(script).map(({ kind, lines }) => ({ kind, lines: lines.flatMap((line) => splitCaption(line)) }));
+}
+
 /** 読みの確認結果(check が保存し、render が照らし合わせる) */
 export const CheckedReadingsSchema = z.object({
   version: z.literal(1),
@@ -283,7 +297,7 @@ export interface ResolvedReadings {
  * なければ組み込みの一覧・プロジェクトの辞書・台本の readings の順に合わせる(後のものが優先)。
  */
 export async function resolveReadings(
-  script: VideoScript,
+  script: { readings?: Readings },
   recorded: Readings | undefined,
   options: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
 ): Promise<ResolvedReadings> {

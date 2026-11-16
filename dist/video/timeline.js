@@ -69,12 +69,15 @@ function layout(scenes, clips) {
     });
     return { scenes: timed, duration: cursor };
 }
+/** 作業報告の台本から、読み上げ音声とシーン・字幕の時刻を作る(buildSceneTimeline を参照) */
+export async function buildTimeline(script, synth, options) {
+    return buildSceneTimeline(sceneLines(script), synth, options);
+}
 /**
  * 読み上げ音声を合成し、その長さからシーンと字幕の時刻を決める。
  * 全体が maxSeconds を超える場合は、話速を maxSpeed まで上げて一度だけ作り直す。
  */
-export async function buildTimeline(script, synth, options) {
-    const scenes = sceneLines(script);
+export async function buildSceneTimeline(scenes, synth, options) {
     const total = scenes.reduce((n, scene) => n + scene.lines.length, 0);
     const synthesizeAll = async (speed) => {
         let done = 0;

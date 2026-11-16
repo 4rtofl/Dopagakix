@@ -12,6 +12,8 @@ AI エージェント(Claude Code)が自分の行った作業を、作業を指�
 
 Claude Code に「動画で報告して」と頼むと、エージェントが同梱のスキル(`video-report`)の手順に従って台本を書き、`dopagakix` コマンドで動画にして渡します。
 
+作業報告のほかに、Discord の会話を要約した縦型動画も作れます。台本は Discord の bot(Bobert)の AI が書き、Bobert が Managed Agents のサンドボックスで `dopagakix` を動かします([会話の要約の動画](#会話の要約の動画))。
+
 ## 仕組み
 
 ```
@@ -274,6 +276,84 @@ VOICEVOX は漢字や英字を誤って読むことがあります(「話速」�
 }
 ```
 
+## 会話の要約の動画
+
+Discord の会話を要約した縦型動画を作ります。Bobert(Discord の bot)から使うためのもので、流れは次のとおりです(4rtoflow/Bobert#118)。
+
+1. Bobert の AI が会話を読み、台本を書きます。Bobert は `dopagakix/conversation` から台本の型と確認の処理を読み込み、Cloudflare Workers の中で台本を確かめます。問題があれば AI に返して直させます。
+2. Bobert は、頼んだ人の Anthropic のアカウントで Managed Agents のサンドボックスを動かします。その中で dopagakix の main を入れ、`check` → 読みの直し → `render` の順に動画を作ります。手順とエージェントへの指示の例は [docs/sandbox.md](docs/sandbox.md) にまとめています。
+
+### 渡すファイル
+
+`check` と `render` には、台本(`script`)と画面に出す数値(`facts`)をまとめたファイルを渡します。`kind` が `"conversation"` のファイルを、会話の要約として扱います。例は [examples/conversation.example.json](examples/conversation.example.json) です。
+
+```json
+{
+  "kind": "conversation",
+  "version": 1,
+  "facts": {
+    "channel": "#開発",
+    "participants": 4,
+    "messages": 38,
+    "firstMessageAt": "2026-11-12T10:02:00+09:00",
+    "lastMessageAt": "2026-11-12T11:41:00+09:00"
+  },
+  "script": { "title": "…", "headline": "…", "opening": { "narration": ["…"] }, "scenes": [], "closing": { "narration": ["…"] } }
+}
+```
+
+- `facts` は、Bobert が実際に AI に渡した発言から数えた数値です。参加者と発言の数、最初と最後の発言の日時(タイムゾーン付きの ISO 8601)は必須で、チャンネルまたはスレッドの名前(`channel`)は任意です。数値は AI の台本には含めず、AI の自己申告にしません。
+- `script` は AI が書く台本です。冒頭(`opening`)と締め(`closing`)は毎回入れ、その間に、会話に合う種類のシーンを 3〜6 つ並べます(`scenes`)。同じ種類を繰り返してもかまいません。
+- 読み上げ文(`narration`)と読みの指定(`readings`)の書き方は、作業報告の台本と同じです。
+- BGM・効果音・図解は使いません。`--bgm` などを指定しても無視します。
+
+シーンの種類:
+
+| 種類 | 欄 | 画面 | 向いている会話 |
+| --- | --- | --- | --- |
+| 話題(`topic`) | `heading`(全角 20 文字以内)、`lines`(1〜2 行、各 28 文字以内) | 罫線の下に大きな見出しと説明 | どれでも |
+| 流れ(`flow`) | `items`(時間の順に最大 5 件、各 28 文字以内) | 「話の流れ」と、番号付きの行 | 報告、相談 |
+| 引用(`quote`) | `text`(元の発言そのまま、60 文字以内)、`by`(任意。発言した人の名前、20 文字以内) | 「印象に残った発言」と、明朝の大きな文字の発言。`by` があれば名前も出す | 雑談 |
+| 論点(`points`) | `point`(28 文字以内)、`opinions`(最大 3 件、各 28 文字以内) | 「論点」と、蛍光ペンの下線を引いた論点、出た意見 | 議論 |
+| 結論(`outcome`) | `decided`・`open`(それぞれ最大 3 件、各 28 文字以内) | 「結論」と、決まったこと(○)、残ったこと(△) | 議論、相談 |
+
+- 引用には、AI が言い換えた文や要約した文を書きません。dopagakix は元の発言と照らし合わせられないので、確かめるのは台本を書かせる側(Bobert)の役目です。長い発言は切り詰めずに `check` で警告するので、短い発言を選ぶか、引用のシーンを使わないようにします。
+- 引用の名前(`by`)は、書かれていればそのまま出します。Discord の表示名を出すかは、台本を書かせる側で決めます。
+- 冒頭には、タイトル、要旨(`headline`)、参加者・発言の数・期間を出します。下の柱と最終ページには「AI による要約」と出します。
+- 動画の長さの目安は、作業報告と同じ 60 秒(`--seconds`)です。
+- 件数の上限を超えた項目と、7 つ目以降のシーンは表示しません。中身のないシーンも出しません。どれも `check` が警告します。
+- 動画が 10MB(Discord に添付できる大きさ)を超えたら、`render` はエラー(終了コード 1)にします。動画は出力先に置かず、作業フォルダーの `oversize.mp4` に移します。
+
+### ほかのプログラムから台本を確かめる
+
+```ts
+import { checkConversationScript, parseConversationScript, ZUNDAMON } from "dopagakix/conversation";
+
+const parsed = parseConversationScript(json); // 形式の誤りは parsed.error に文で入る
+if (parsed.success) {
+  const { issues } = checkConversationScript(parsed.data, { persona: ZUNDAMON, seconds: 60 });
+}
+```
+
+- `dopagakix/conversation` は、package.json の `exports` で出している入口です。型(`.d.ts`)も付けています。
+- この入口から読み込むのは zod と、Node.js の機能(fs・child_process・path・process・Buffer など)に頼らないファイルだけです。Cloudflare Workers でも動きます。テスト(`test/conversation-entry.test.ts`)で確かめています。
+- 確かめるのは、形式、件数と文字数、シーンの数、読み上げにくい表記、口調の文末、読み上げ文の長さです。読みの確認は VOICEVOX が要るので含みません。サンドボックスの `check` で行います。
+- 警告の `at` は、台本(`script`)の中の位置です(例: `scenes[1].narration[0]`)。
+- `conversationScriptJsonSchema()` で、台本の JSON Schema を得られます。各欄の説明に文字数の上限などを書いているので、AI に台本の形を伝えるのに使えます。
+
+### 互換性の決まり
+
+サンドボックスはいつも dopagakix の main を入れます。一方、Bobert が読み込む `dopagakix/conversation` は、Bobert をデプロイした時点の版です。このずれで動画が作れなくならないよう、次のものを壊す形で変えません。
+
+1. **会話の要約のファイルの形式**(`ConversationFileSchema`、`src/conversation/schema.ts`)。
+   - 欄を足すときは、任意の欄にします。
+   - 必須の欄を足す、欄をなくす、受け付ける値を狭める、欄の意味を変える、といった変更をするときは、`version` を上げ、古い版のファイルも受け付けます。
+   - 確認の処理(`checkConversationScript`)は、警告を足してもかまいません。台本を書かせる側は、警告を AI に返して直させるだけなので、壊れません。
+2. **`check` と `render` のコマンド**: コマンドの名前、オプション、終了コードの意味。サンドボックスでの手順と、エージェントへの指示がこれに頼ります。
+3. **出力の形**: `check --json` の出力の欄と意味(特に、読みの確認の結果の `readings`)、`render` が標準出力に動画のパスを 1 行だけ出すこと、10MB を超えた動画を出力先に置かないこと、`scripts/sandbox/setup-voicevox.sh` の引数と出力。欄を足すのはかまいません。
+
+CI では、同梱の例(`examples/conversation.example.json`)を `check` で確かめ、読み上げ付きの動画も作ります。
+
 ## VOICEVOX とキャラクターの規約
 
 生成した動画の音声には、本ツールのライセンスとは別に、次の規約が適用されます(2026 年 10 月 14 日に確認。規約は変わることがあるため、使う前に原文を確認してください)。
@@ -301,8 +381,8 @@ VOICEVOX は漢字や英字を誤って読むことがあります(「話速」�
 | コマンド | 内容 |
 |----------|------|
 | `dopagakix prepare` | 出力先を作り、台本を書くための情報(画面に出る数値、口調、文字数の目安、環境、次に実行するコマンド)を表示する |
-| `dopagakix check <report.json>` | 台本と全文の読みを確かめ、確かめた読みを保存する。描画はしない |
-| `dopagakix render <report.json>` | 動画を作る。`check` で確かめた読みと一致しなければ止まる。完成した mp4 のパスだけを標準出力に出す(進捗は標準エラー) |
+| `dopagakix check <report.json>` | 台本と全文の読みを確かめ、確かめた読みを保存する。描画はしない。会話の要約のファイルも受け付ける。`--json` で結果を JSON で出す |
+| `dopagakix render <report.json>` | 動画を作る。`check` で確かめた読みと一致しなければ止まる。完成した mp4 のパスだけを標準出力に出す(進捗は標準エラー)。会話の要約のファイルも受け付ける |
 | `dopagakix digest` | セッションログを時系列のダイジェストにする(エージェントが作業を振り返る用。既定で 3 万文字以内) |
 | `dopagakix sessions` | プロジェクトのセッションログを新しい順に表示する |
 | `dopagakix speakers` | VOICEVOX の話者とスタイル ID を表示する |
@@ -325,6 +405,8 @@ VOICEVOX は漢字や英字を誤って読むことがあります(「話速」�
 | `--sfx-dir <dir>` / `--sfx-credit <text>` / `--sfx-volume <dB>` | 上の表 | 効果音のディレクトリ・クレジット・音量(`prepare` / `render`)。環境変数より優先されます。`--no-sfx` で効果音なし([効果音](#効果音)) |
 | `--video-dir <dir>` | (なし) | 完成した動画だけを置くフォルダ(`prepare` / `render`)。環境変数 `DOPAGAKIX_VIDEO_DIR` でも可 |
 | `-o, --out <file>` | 台本と同じ場所の `summary.mp4` | 動画の出力先(`render` のみ)。作業ファイルも同じ場所に置き、`--video-dir` より優先します |
+| `--work-dir <dir>` | 動画と同じ場所(`-o`)、または台本と同じ場所 | 作業ファイル(`narration.wav`・`audio.wav`・`timeline.json`・`script.json`)を置くフォルダ(`render` のみ)。`-o` と組み合わせると、出力先に動画だけを置けます |
+| `--json` | (文で出す) | 結果を JSON で出します(`check` のみ。形は [docs/sandbox.md](docs/sandbox.md)) |
 
 `prepare` に付けたオプションは、`prepare` が表示する `check` / `render` のコマンドにも引き継がれます。
 
@@ -332,6 +414,8 @@ VOICEVOX は漢字や英字を誤って読むことがあります(「話速」�
 
 ```bash
 dopagakix render "$(npm root -g)/dopagakix/examples/script.example.json" --no-voice -o dopagakix-sample/summary.mp4
+# 会話の要約
+dopagakix render "$(npm root -g)/dopagakix/examples/conversation.example.json" --no-voice -o dopagakix-sample/conversation.mp4 --work-dir dopagakix-sample/work
 ```
 
 ## 所要時間の目安
@@ -370,8 +454,8 @@ GitHub Actions(`.github/workflows/ci.yml`)で、push のたびに次の 3 つを
 | ジョブ | 内容 |
 |--------|------|
 | テスト | Node.js 22・24・26 で型検査と `npm test`。Chromium と ffmpeg を入れ、描画の結合テストを省略させない |
-| git からの導入 | 利用者と同じく git から `npm install -g` で導入し、スキルの導入と同梱サンプルの描画を確かめる |
-| VOICEVOX との結合 | VOICEVOX ENGINE(Docker イメージ `cpu-0.25.2`)を起動し、実エンジンのテスト(読みの確認と `check` → `render` の流れを含む)と、読み上げ付きの動画(BGM・効果音なし、合成音の BGM 付き、合成音の効果音付き)の作成を行う。全体の音量、読み上げ中に BGM が下がること、効果音が決めた時刻に鳴り読み上げと重ならないことも確かめる。作った動画は成果物(`voiced-sample`・`voiced-bgm-sample`・`voiced-sfx-sample`)として 7 日間保存する |
+| git からの導入 | 利用者と同じく git から `npm install -g` で導入し、スキルの導入と同梱サンプル(作業報告・会話の要約)の確認と描画を確かめる |
+| VOICEVOX との結合 | VOICEVOX ENGINE(Docker イメージ `cpu-0.25.2`)を起動し、実エンジンのテスト(読みの確認と `check` → `render` の流れを含む)と、読み上げ付きの動画(BGM・効果音なし、合成音の BGM 付き、合成音の効果音付き、会話の要約)の作成を行う。会話の要約は、サンドボックスと同じく `check --json` → `render --work-dir` で作り、出力先に動画だけがあることを確かめる。全体の音量、読み上げ中に BGM が下がること、効果音が決めた時刻に鳴り読み上げと重ならないことも確かめる。作った動画は成果物(`voiced-sample`・`voiced-bgm-sample`・`voiced-sfx-sample`・`conversation-sample`)として 7 日間保存する |
 
 結合テストは、必要な道具がない環境では省略されます。CI では環境変数 `DOPAGAKIX_TEST_REQUIRE_RENDER` / `DOPAGAKIX_TEST_REQUIRE_VOICEVOX` を `1` にして、準備に失敗したときに省略されたまま成功に見えないようにしています。
 
@@ -382,20 +466,24 @@ src/
 ├── brief.ts               prepare の表示内容と環境の確認
 ├── skill.ts               スキルの導入
 ├── facts.ts               ログから集計する事実情報の型
-├── persona.ts             キャラクターの口調
+├── persona.ts             キャラクターの口調(ファイルの読み込みと話者からの選択)
+├── personas.ts            口調の定義と文末の確認(Node.js の機能に頼らない)
+├── conversation/          会話の要約の台本の型・整形・確認。index.ts が dopagakix/conversation の入口
 ├── redact.ts              秘匿情報のマスク
 ├── transcript/            セッションログの探索・解析・ダイジェスト化
 ├── script/                台本のスキーマ・整形・確認(check)・読みの指定と照合
 ├── tts/                   VOICEVOX・無音合成・WAV 処理
 ├── audio/                 音声の仕上げ(BGM・効果音の合成、音量の調整)
-└── video/                 タイムライン・HTML テンプレート・描画
+└── video/                 タイムライン・HTML テンプレート(作業報告・会話の要約)・描画
 dist/                      ビルド済みの CLI(npm run compile で更新し、コミットする)
 .claude/skills/video-report/  エージェント用のスキル(npm パッケージにも同梱)
 .github/workflows/ci.yml   CI(GitHub Actions)
 .claude/skills/ui-ux-pro-max/ UI/UX Pro Max スキル(npm ui-ux-pro-max-cli 2.15.0、MIT。デザインの検討用)
 test/                      vitest のテストと合成フィクスチャ
-examples/                  スキルを使わずに render を試すためのサンプル
+examples/                  スキルを使わずに render を試すためのサンプル(作業報告・会話の要約)
+scripts/sandbox/           サンドボックスで VOICEVOX ENGINE を入れて起動するスクリプト
 docs/design.md             動画のデザイン方針(避ける要素、トークン、構成の決まりごと)
+docs/sandbox.md            サンドボックスで会話の要約の動画を作る手順
 ```
 
 見た目を変えるときは、先に [docs/design.md](docs/design.md) を確認してください。

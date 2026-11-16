@@ -1,12 +1,12 @@
-import { checkEndings } from "../persona.js";
+import { checkEndings } from "../personas.js";
 import { LIMITS } from "./normalize.js";
 import { FIGURE_LIMITS } from "./schema.js";
 /** 読み上げ文 1 文の長さの目安(全角)。字幕 1 枚に収まる */
 export const SENTENCE_LIMIT = 35;
 /** これを超えたら警告する(字幕が 2 枚に分かれる) */
-const SENTENCE_WARN = 45;
+export const SENTENCE_WARN = 45;
 /** 1 シーンの文の数の上限の目安 */
-const SENTENCES_PER_SCENE = 3;
+export const SENTENCES_PER_SCENE = 3;
 /**
  * 読み上げ文の合計文字数の目安。VOICEVOX ずんだもんの実測で、話速 1.25 で約 7.3 文字/秒。
  * シーン切り替えや文間の間(合計 8 秒程度)を除いた時間に収まるよう、少なめ(6 文字/秒)に見積もる。
@@ -24,7 +24,7 @@ const HARD_TO_READ = [
 ];
 /** ファイル名に見えるが、製品名としてそのまま読んでよいもの */
 const PRODUCT_NAMES = /\b(?:node|next|nuxt|vue|three|chart|solid|ember|express|alpine|d3)\.js\b/gi;
-function hardToRead(text) {
+export function hardToRead(text) {
     const target = text.replace(PRODUCT_NAMES, "");
     return HARD_TO_READ.filter(([pattern]) => pattern.test(target)).map(([, label]) => label);
 }

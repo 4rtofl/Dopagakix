@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
+import { conversationNarrations } from "../conversation/normalize.js";
 import { cleanText } from "./normalize.js";
 import { VideoScriptSchema } from "./schema.js";
 import { splitCaption } from "../video/timeline.js";
@@ -138,6 +139,14 @@ export function speechUnits(script) {
         ...units(key, script[key].narration),
         ...(key === "work" && script.figure ? units("figure", script.figure.narration) : []),
     ]);
+}
+/** 会話の要約の台本の読み上げ文を、描画のときに音声を作るのと同じ単位にする。at は台本(script)の中の位置 */
+export function conversationSpeechUnits(script) {
+    return conversationNarrations(script).flatMap(({ at, lines }) => lines.flatMap((line, i) => splitCaption(line).map((text) => ({ at: `${at}[${i}]`, text }))));
+}
+/** 会話の要約の台本の、シーンごとの読み上げ文(字幕 1 枚ごとに分けたもの)。描画の順 */
+export function conversationSceneLines(script) {
+    return conversationNarrations(script).map(({ kind, lines }) => ({ kind, lines: lines.flatMap((line) => splitCaption(line)) }));
 }
 /** 読みの確認結果(check が保存し、render が照らし合わせる) */
 export const CheckedReadingsSchema = z.object({

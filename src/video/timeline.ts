@@ -1,3 +1,4 @@
+import type { ConversationSceneType } from "../conversation/schema.js";
 import type { VideoScript } from "../script/schema.js";
 import type { Synthesizer } from "../tts/types.js";
 import { durationOf, mixInto, type Pcm, silence } from "../tts/wav.js";
@@ -5,6 +6,14 @@ import { durationOf, mixInto, type Pcm, silence } from "../tts/wav.js";
 /** シーンの並び。figure(図解)は台本に figure があるときだけ入る */
 export const SCENE_KINDS = ["opening", "work", "figure", "verification", "decisions", "closing"] as const;
 export type SceneKind = (typeof SCENE_KINDS)[number];
+/** 会話の要約のシーン。冒頭と締めの間に、台本に書かれた種類のシーンが並ぶ(同じ種類が続くこともある) */
+export type ConversationSceneKind = "opening" | ConversationSceneType | "closing";
+
+/** シーン 1 つ分の読み上げ文(字幕 1 枚ごとに分けたもの) */
+export interface SceneLines {
+  kind: SceneKind | ConversationSceneKind;
+  lines: string[];
+}
 
 /** 字幕 1 枚分。start〜end は読み上げ音声が鳴っている区間(秒)。 */
 export interface Cue {
@@ -14,7 +23,7 @@ export interface Cue {
 }
 
 export interface TimedScene {
-  kind: SceneKind;
+  kind: SceneKind | ConversationSceneKind;
   start: number;
   end: number;
   cues: Cue[];
@@ -67,7 +76,7 @@ export function splitCaption(text: string, max = CAPTION_MAX): string[] {
   return [...splitCaption(trimmed.slice(0, best), max), ...splitCaption(trimmed.slice(best), max)];
 }
 
-export function sceneLines(script: VideoScript): Array<{ kind: SceneKind; lines: string[] }> {
+export function sceneLines(script: VideoScript): SceneLines[] {
   const narration: Record<SceneKind, string[] | undefined> = {
     opening: script.opening.narration,
     work: script.work.narration,
@@ -84,7 +93,7 @@ export function sceneLines(script: VideoScript): Array<{ kind: SceneKind; lines:
 
 const round = (seconds: number) => Math.round(seconds * 1000) / 1000;
 
-function layout(scenes: Array<{ kind: SceneKind; lines: string[] }>, clips: Pcm[][]): { scenes: TimedScene[]; duration: number } {
+function layout(scenes: SceneLines[], clips: Pcm[][]): { scenes: TimedScene[]; duration: number } {
   let cursor = 0;
   const timed = scenes.map((scene, i) => {
     const start = cursor;
@@ -104,12 +113,16 @@ function layout(scenes: Array<{ kind: SceneKind; lines: string[] }>, clips: Pcm[
   return { scenes: timed, duration: cursor };
 }
 
+/** 作業報告の台本から、読み上げ音声とシーン・字幕の時刻を作る(buildSceneTimeline を参照) */
+export async function buildTimeline(script: VideoScript, synth: Synthesizer, options: TimelineOptions): Promise<Timeline> {
+  return buildSceneTimeline(sceneLines(script), synth, options);
+}
+
 /**
  * 読み上げ音声を合成し、その長さからシーンと字幕の時刻を決める。
  * 全体が maxSeconds を超える場合は、話速を maxSpeed まで上げて一度だけ作り直す。
  */
-export async function buildTimeline(script: VideoScript, synth: Synthesizer, options: TimelineOptions): Promise<Timeline> {
-  const scenes = sceneLines(script);
+export async function buildSceneTimeline(scenes: SceneLines[], synth: Synthesizer, options: TimelineOptions): Promise<Timeline> {
   const total = scenes.reduce((n, scene) => n + scene.lines.length, 0);
 
   const synthesizeAll = async (speed: number) => {

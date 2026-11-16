@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +12,7 @@ import { canRender, voicevoxAvailable, voicevoxUrl } from "./support.js";
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const example = path.join(root, "examples", "script.example.json");
 const transcript = path.join(root, "test", "fixtures", "session.jsonl");
+const conversationExample = path.join(root, "examples", "conversation.example.json");
 
 /** ソースの CLI を実行する。接続できない VOICEVOX を指定し、起動コマンドと必須化の設定は外す */
 async function run(args: string[], env: Record<string, string> = {}) {
@@ -230,5 +231,108 @@ describe("CLI: 効果音", () => {
     ]);
     expect(result.stdout).toContain(`- 効果音: [不足] 効果音のディレクトリが見つかりません: ${missing}`);
     expect(result.stdout).toMatch(/3\. 描画する: dopagakix render .* --sfx-dir \S+no-such-sfx --sfx-credit '効果音：効果音ラボ' --sfx-volume=-6/);
+  });
+});
+
+describe("CLI: 会話の要約", () => {
+  let dir: string;
+  beforeAll(async () => {
+    dir = await mkdtemp(path.join(os.tmpdir(), "dopagakix-cli-conversation-"));
+  });
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("check は kind: conversation のファイルを会話の要約として確かめる(セッションログは探さない)", async () => {
+    const result = await run(["check", conversationExample, "--no-voice", "--persona", "zundamon"]);
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.stdout).toMatch(/^形式: 正しい\(「リリース日の見直し」、会話の要約\)/);
+    expect(result.stdout).toContain("口調: ずんだもん(文末を確認)");
+    expect(result.stdout).toContain("警告: なし");
+    expect(result.stdout).not.toContain("数値:");
+  });
+
+  it("check --json は結果を JSON で出し、読みを確かめられなければ status: failed にして終了コード 1 にする", async () => {
+    const skipped = await run(["check", conversationExample, "--no-voice", "--json"]);
+    expect(skipped.code).toBe(0);
+    expect(JSON.parse(skipped.stdout)).toMatchObject({
+      kind: "conversation",
+      title: "リリース日の見直し",
+      narration: { sentences: 11, seconds: 60 },
+      persona: null,
+      issues: [],
+      readings: { status: "skipped", reason: "読み上げなし" },
+    });
+
+    const failed = await run(["check", conversationExample, "--json"]);
+    expect(failed.code).toBe(1);
+    expect(JSON.parse(failed.stdout)).toMatchObject({
+      readings: { status: "failed", error: expect.stringMatching(/VOICEVOX エンジン\(http:\/\/127\.0\.0\.1:59999\)に接続できません/) },
+    });
+  });
+
+  it("check --json の警告の at は、ファイルの script の中の位置を指す", async () => {
+    const file = JSON.parse(await readFile(conversationExample, "utf8"));
+    file.script.scenes[1].items.push("五つ目", "六つ目");
+    const target = path.join(dir, "over", "conversation.json");
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, JSON.stringify(file));
+    const result = await run(["check", target, "--no-voice", "--json"]);
+    expect(JSON.parse(result.stdout).issues).toEqual([{ at: "scenes[1].items", message: "6 件あります。表示されるのは先頭の 5 件だけです。" }]);
+  });
+
+  it("形式が正しくなければ、どこが違うかを示してエラーにする", async () => {
+    const file = JSON.parse(await readFile(conversationExample, "utf8"));
+    delete file.facts.messages;
+    const target = path.join(dir, "bad", "conversation.json");
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, JSON.stringify(file));
+    const result = await run(["check", target, "--no-voice"]);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toMatch(/の形式が正しくありません:[\s\S]*facts\.messages/);
+  });
+
+  it("render は VOICEVOX に接続できなければ止まる(字幕のみに切り替えない)", async () => {
+    const out = path.join(dir, "voice", "summary.mp4");
+    const result = await run(["render", conversationExample, "-o", out]);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toMatch(/VOICEVOX エンジン.*に接続できません/);
+    expect(existsSync(out)).toBe(false);
+  });
+
+  it.runIf(canRender)("render --work-dir は、出力先に動画だけを置く(読み上げなし)", { timeout: 300_000 }, async () => {
+    const work = path.join(dir, "work");
+    const outputs = path.join(dir, "outputs");
+    await mkdir(work, { recursive: true });
+    const input = path.join(work, "conversation.json");
+    await copyFile(conversationExample, input);
+    const result = await run(["render", input, "--no-voice", "--fps", "2", "-o", path.join(outputs, "summary.mp4"), "--work-dir", work]);
+    expect(result.code, result.stderr).toBe(0);
+    expect(await readdir(outputs)).toEqual(["summary.mp4"]);
+    expect((await readdir(work)).sort()).toEqual(["audio.wav", "conversation.json", "narration.wav", "script.json", "timeline.json"]);
+    const record = JSON.parse(await readFile(path.join(work, "script.json"), "utf8"));
+    expect(record).toMatchObject({ kind: "conversation", version: 1, voice: { enabled: false }, facts: { participants: 4 } });
+    // 残した script.json から、同じ形式で描画し直せる
+    const again = await run(["check", path.join(work, "script.json"), "--no-voice"]);
+    expect(again.code, again.stderr).toBe(0);
+  });
+
+  // 実エンジンと描画の道具がそろった環境でだけ実行する(CI の「VOICEVOX との結合」)
+  it.runIf(voicevoxAvailable && canRender)("check で読みを確かめてから、読み上げ付きで描画できる", { timeout: 300_000 }, async () => {
+    const env = { VOICEVOX_URL: voicevoxUrl };
+    const work = path.join(dir, "voiced");
+    await mkdir(work, { recursive: true });
+    const input = path.join(work, "conversation.json");
+    await copyFile(conversationExample, input);
+    const checked = await run(["check", input, "--json"], env);
+    expect(checked.code, checked.stderr).toBe(0);
+    const output = JSON.parse(checked.stdout);
+    expect(output).toMatchObject({ kind: "conversation", persona: "ずんだもん", readings: { status: "checked", speaker: { name: "ずんだもん" } } });
+    expect(output.readings.sentences[0]).toMatchObject({ at: "opening.narration[0]", text: "来週のリリースを予定どおり出すかについての会話なのだ。" });
+    const out = path.join(dir, "voiced-out", "summary.mp4");
+    const rendered = await run(["render", input, "--fps", "2", "-o", out, "--work-dir", work], env);
+    expect(rendered.code, rendered.stderr).toBe(0);
+    expect(rendered.stderr).toMatch(/読み: check で確かめた読みと一致\(\d+ 文\)/);
+    expect(await readdir(path.dirname(out))).toEqual(["summary.mp4"]);
   });
 });

@@ -63,7 +63,7 @@ function formatElapsed(minutes: number | undefined): { value: string; unit: stri
   return { value: hours >= 10 ? String(Math.round(hours)) : hours.toFixed(1), unit: "時間" };
 }
 
-const number = (n: number) => n.toLocaleString("ja-JP");
+export const number = (n: number) => n.toLocaleString("ja-JP");
 /** 大きな数は桁を丸めて枠に収める */
 const compact = (n: number) =>
   n >= 100_000 ? `${Math.round(n / 1000)}k` : n >= 10_000 ? `${(n / 1000).toFixed(1)}k` : number(n);
@@ -80,7 +80,7 @@ function visualLength(text: string): number {
  * タイトルの文字の大きさ。日本語は文節の途中で改行しないようにしている(word-break: auto-phrase)が、
  * 1 行に収まらない長い文節は途中で折り返されるため、2 行以上になるタイトルは小さめにする。
  */
-function titleClass(title: string): string {
+export function titleClass(title: string): string {
   const length = visualLength(title);
   return length <= 8 ? "title" : length <= 20 ? "title mid" : "title long";
 }
@@ -97,10 +97,10 @@ export const RESULT_ROW_DELAY = enterDelay(RESULT_ROW);
 export const endMarkDelay = (nextSteps: number) => enterDelay(nextSteps + 1);
 
 /** 要素の登場順(アニメーションの遅延)を付ける */
-const enter = (cls: string, i: number) => `class="enter ${cls}" style="--i:${i}"`;
+export const enter = (cls: string, i: number) => `class="enter ${cls}" style="--i:${i}"`;
 
 /** 新聞の欄見出しのように、罫線の下に見出しを置く */
-function sectionHead(text: string, attention = false): string {
+export function sectionHead(text: string, attention = false): string {
   return `<div class="section${attention ? " attention" : ""}"><div class="rule rule-in"></div><h2 ${enter("section-title", 0)}>${escapeHtml(text)}</h2></div>`;
 }
 
@@ -586,25 +586,28 @@ const PAGE_SCRIPT = String.raw`
 })();
 `;
 
-/** 動画 1 本分のページを作る。フォントは /fonts/ 以下から読み込む前提。 */
-export function buildHtml(input: TemplateInput): string {
-  const { script, facts, scenes, credit, bgmCredit, sfxCredit, silent, author, timeZone } = input;
-  const bodies: Record<SceneKind, string> = {
-    opening: openingScene(script, facts, timeZone),
-    work: workScene(script, facts),
-    figure: script.figure ? figureScene(script.figure, scenes.find((scene) => scene.kind === "figure")) : "",
-    verification: verificationScene(script),
-    decisions: decisionsScene(script),
-    closing: closingScene(script, facts, credit, bgmCredit, sfxCredit, author, timeZone),
-  };
+export interface PageInput {
+  /** 題字(例: 作業報告) */
+  mastTitle: string;
+  /** 題字の右に出す日付 */
+  date: string;
+  /** シーンごとの本文。scenes と同じ順 */
+  bodies: string[];
+  scenes: TimedScene[];
+  /** 柱の左に出す場所(プロジェクト名やチャンネル名) */
+  where: string;
+  /** 柱の右に出す表示(AI 作成、クレジット、音声なしなど) */
+  labels: string[];
+  /** 種類に固有のスタイル */
+  extraStyle?: string;
+}
+
+/** 動画 1 本分のページの枠(題字・本文・字幕・柱)を組む。フォントは /fonts/ 以下から読み込む前提。 */
+export function pageHtml(input: PageInput): string {
+  const { mastTitle, date, bodies, scenes, where, labels, extraStyle } = input;
   const sections = scenes
-    .map((scene) => `<section class="scene" data-kind="${scene.kind}"><div class="content">${bodies[scene.kind]}</div></section>`)
+    .map((scene, i) => `<section class="scene" data-kind="${scene.kind}"><div class="content">${bodies[i] ?? ""}</div></section>`)
     .join("\n");
-  const where = [facts.project, facts.branch].filter(Boolean).join(" ・ ");
-  const date = formatDateTime(facts.endTime, timeZone).slice(0, 10).replaceAll("/", ".");
-  const labels = [author === "agent" ? "AI 作成" : undefined, credit, silent ? "音声なし" : undefined]
-    .filter(Boolean)
-    .map((l) => `<span>${escapeHtml(l!)}</span>`);
   const data = JSON.stringify({ scenes: scenes.map(({ kind, start, end, cues }) => ({ kind, start, end, cues })) }).replace(
     /</g,
     "\\u003c",
@@ -620,13 +623,13 @@ export function buildHtml(input: TemplateInput): string {
 <link rel="stylesheet" href="/fonts/gothic/700.css">
 <link rel="stylesheet" href="/fonts/gothic/900.css">
 <link rel="stylesheet" href="/fonts/mono/index.css">
-<style>${STYLE}</style>
+<style>${STYLE}${extraStyle ?? ""}</style>
 </head>
 <body>
 <div id="stage">
   <header class="masthead">
     <div class="mast-row">
-      <div class="mast-title">作業報告</div>
+      <div class="mast-title">${escapeHtml(mastTitle)}</div>
       <div class="mast-meta">${escapeHtml(date)}</div>
     </div>
     <div class="double-rule"></div>
@@ -637,11 +640,32 @@ ${sections}
   <div class="caption-zone"><div id="caption"></div></div>
   <footer class="folio">
     <span class="where">${escapeHtml(where)}</span>
-    <span class="right">${labels.join("")}<span class="page" id="page"></span></span>
+    <span class="right">${labels.map((l) => `<span>${escapeHtml(l)}</span>`).join("")}<span class="page" id="page"></span></span>
   </footer>
 </div>
 <script id="timeline-data" type="application/json">${data}</script>
 <script>${PAGE_SCRIPT}</script>
 </body>
 </html>`;
+}
+
+/** 作業報告の動画 1 本分のページを作る。フォントは /fonts/ 以下から読み込む前提。 */
+export function buildHtml(input: TemplateInput): string {
+  const { script, facts, scenes, credit, bgmCredit, sfxCredit, silent, author, timeZone } = input;
+  const bodies: Record<SceneKind, () => string> = {
+    opening: () => openingScene(script, facts, timeZone),
+    work: () => workScene(script, facts),
+    figure: () => (script.figure ? figureScene(script.figure, scenes.find((scene) => scene.kind === "figure")) : ""),
+    verification: () => verificationScene(script),
+    decisions: () => decisionsScene(script),
+    closing: () => closingScene(script, facts, credit, bgmCredit, sfxCredit, author, timeZone),
+  };
+  return pageHtml({
+    mastTitle: "作業報告",
+    date: formatDateTime(facts.endTime, timeZone).slice(0, 10).replaceAll("/", "."),
+    bodies: scenes.map((scene) => bodies[scene.kind as SceneKind]?.() ?? ""),
+    scenes,
+    where: [facts.project, facts.branch].filter(Boolean).join(" ・ "),
+    labels: [author === "agent" ? "AI 作成" : undefined, credit, silent ? "音声なし" : undefined].filter((l): l is string => Boolean(l)),
+  });
 }

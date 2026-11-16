@@ -1,7 +1,7 @@
 {
   "name": "dopagakix",
   "version": "0.1.0",
-  "description": "AI エージェント(Claude Code)が書いた作業報告から、指示者向けの縦型動画(9:16 mp4)を作る CLI とスキル",
+  "description": "AI エージェント(Claude Code)が書いた作業報告や、Discord の会話の要約から、縦型動画(9:16 mp4)を作る CLI とスキル",
   "type": "module",
   "private": true,
   "license": "MIT",
@@ -12,10 +12,18 @@
   "bin": {
     "dopagakix": "dist/cli.js"
   },
+  "exports": {
+    "./conversation": {
+      "types": "./dist/conversation/index.d.ts",
+      "default": "./dist/conversation/index.js"
+    },
+    "./package.json": "./package.json"
+  },
   "files": [
     "dist",
     ".claude/skills/video-report",
-    "examples"
+    "examples",
+    "scripts/sandbox"
   ],
   "engines": {
     "node": ">=22"
