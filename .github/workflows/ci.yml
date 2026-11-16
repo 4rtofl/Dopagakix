@@ -126,14 +126,17 @@ jobs:
           test -n "$volume"
           awk -v v="$volume" 'BEGIN { exit !(v > -40) }'
           # BGM がなくても、全体の音量を -16 ±1 LUFS・トゥルーピーク -1.5 dBTP 以下にそろえている
-          ./.github/scripts/check-loudness.sh "$out"
+          # (mp4 は AAC への変換でピークが上がるため、-1 dBTP 以下を確かめる)
+          ./.github/scripts/check-loudness.sh "$RUNNER_TEMP/voiced/audio.wav" -1.5
+          ./.github/scripts/check-loudness.sh "$out" -1
       - name: BGM 付きの動画を作る
         run: |
           # ライセンス上の問題がない合成音(60 Hz の正弦波、10 秒)を BGM にする。動画より短いのでループする
           ffmpeg -hide_banner -loglevel error -f lavfi -i sine=frequency=60:duration=10 "$RUNNER_TEMP/sine60.wav"
           out="$RUNNER_TEMP/voiced-bgm/summary.mp4"
           node dist/cli.js render examples/script.example.json --fps 4 --bgm "$RUNNER_TEMP/sine60.wav" --bgm-credit "BGM: 60 Hz の合成音" -o "$out"
-          ./.github/scripts/check-loudness.sh "$out"
+          ./.github/scripts/check-loudness.sh "$RUNNER_TEMP/voiced-bgm/audio.wav" -1.5
+          ./.github/scripts/check-loudness.sh "$out" -1
           grep -q '"credit": "BGM: 60 Hz の合成音"' "$RUNNER_TEMP/voiced-bgm/script.json"
       - name: 作った動画を保存する
         if: always()

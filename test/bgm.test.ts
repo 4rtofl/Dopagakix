@@ -312,9 +312,13 @@ describe.runIf(voicevoxAvailable && canRender)("BGM 付きの動画(VOICEVOX と
       { outFile: path.join(workDir, "summary.mp4"), workDir, synth, speed: 1.25, maxSpeed: 1.45, maxSeconds: 120, fps: 2, scale: 0.25 },
     );
 
+    // 仕上げた音声はトゥルーピーク -1.5 dBTP 以下。AAC への変換でピークが上がるので、mp4 は -1 dBTP 以下を確かめる
+    const finished = loudnessOf(result.audioFile);
+    expect(Math.abs(finished.integrated + 16)).toBeLessThanOrEqual(1);
+    expect(finished.truePeak).toBeLessThanOrEqual(-1.5);
     const measured = loudnessOf(result.outFile);
     expect(Math.abs(measured.integrated + 16)).toBeLessThanOrEqual(1);
-    expect(measured.truePeak).toBeLessThanOrEqual(-1.5);
+    expect(measured.truePeak).toBeLessThanOrEqual(-1);
 
     const { scenes, duration } = JSON.parse(await readFile(path.join(workDir, "timeline.json"), "utf8")) as {
       scenes: TimedScene[];
@@ -336,7 +340,9 @@ describe.runIf(voicevoxAvailable && canRender)("BGM 付きの動画(VOICEVOX と
         band,
         during.filter(([a, b]) => inside(a, b)),
       );
-    console.log(`BGM の下がり量: ${drop.toFixed(1)} dB、全体 ${measured.integrated} LUFS・${measured.truePeak} dBTP`);
+    console.log(
+      `BGM の下がり量: ${drop.toFixed(1)} dB、仕上げた音声 ${finished.integrated} LUFS・${finished.truePeak} dBTP、mp4 ${measured.truePeak} dBTP`,
+    );
     expect(drop).toBeGreaterThanOrEqual(6);
   });
 });
