@@ -251,9 +251,9 @@ describe.runIf(canRender)("renderReport(結合テスト)", () => {
     );
     expect(existsSync(result.outFile)).toBe(true);
     expect(existsSync(path.join(workDir, "narration.wav"))).toBe(true);
-    expect(result.stats.fitScales).toHaveLength(5);
+    expect(result.stats.fitScales).toHaveLength(6);
     const timeline = JSON.parse(await readFile(path.join(workDir, "timeline.json"), "utf8")) as { scenes: Array<{ kind: string }> };
-    expect(timeline.scenes.map((scene) => scene.kind)).toEqual(["opening", "work", "verification", "decisions", "closing"]);
+    expect(timeline.scenes.map((scene) => scene.kind)).toEqual(["opening", "work", "figure", "verification", "decisions", "closing"]);
     const record = ScriptFileSchema.parse(JSON.parse(await readFile(result.scriptFile, "utf8")));
     expect(record).toMatchObject({ author: "agent", persona: { id: "zundamon" }, voice: { enabled: false }, facts: report.facts });
 
