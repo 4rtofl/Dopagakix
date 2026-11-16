@@ -6,11 +6,22 @@ import { z } from "zod";
 import type { SessionFacts } from "./facts.js";
 import { redactSecrets } from "./redact.js";
 import { normalizeScript } from "./script/normalize.js";
+import {
+  type CheckedReadings,
+  checkedReadingsFile,
+  compareReadings,
+  loadCheckedReadings,
+  mismatchMessage,
+  type Readings,
+  reviewReasons,
+  type SpeechUnit,
+  speechUnits,
+} from "./script/readings.js";
 import { type Author, type ScriptFile, ScriptFileSchema, type VideoScript, VideoScriptSchema } from "./script/schema.js";
 import { SilentSynthesizer } from "./tts/silent.js";
 import { withVoicevoxStart } from "./tts/start.js";
 import type { Synthesizer } from "./tts/types.js";
-import { VoicevoxSynthesizer } from "./tts/voicevox.js";
+import { type SpokenText, VoicevoxSynthesizer } from "./tts/voicevox.js";
 import { encodeWav, peakDbfs } from "./tts/wav.js";
 import { buildDigest, collectFacts } from "./transcript/digest.js";
 import { type LocatedTranscript, type LocateOptions, locateTranscript } from "./transcript/locate.js";
@@ -95,6 +106,8 @@ export interface LoadedReport {
   /** script.json(描画したときの記録)から読んだ場合の事実情報 */
   facts?: SessionFacts;
   persona?: { id: string; name: string };
+  /** script.json に記録された、描画に使った読みの指定 */
+  readings?: Readings;
 }
 
 function formatError(file: string, error: z.ZodError): Error {
@@ -115,8 +128,8 @@ export async function loadReport(file: string): Promise<LoadedReport> {
   if (json !== null && typeof json === "object" && "version" in json) {
     const parsed = ScriptFileSchema.safeParse(json);
     if (!parsed.success) throw formatError(file, parsed.error);
-    const { script, author, facts, persona } = parsed.data;
-    return { raw: script, script: normalizeScript(script), author, facts, persona };
+    const { script, author, facts, persona, readings } = parsed.data;
+    return { raw: script, script: normalizeScript(script), author, facts, persona, readings };
   }
   const parsed = VideoScriptSchema.safeParse(json);
   if (!parsed.success) throw formatError(file, parsed.error);
@@ -139,6 +152,8 @@ export interface SynthesizerOptions {
   voicevoxUrl: string;
   /** クレジット表記の指定(省略時は話者から決める) */
   credit?: string;
+  /** 読みの指定(VOICEVOX に送る文だけを置き換える) */
+  readings?: Readings;
   /** 接続できないときに実行するエンジンの起動コマンド(環境変数 DOPAGAKIX_VOICEVOX_START) */
   startCommand?: string;
   /** 起動コマンドを実行する直前に呼ぶ(応答を待つ間の表示用) */
@@ -153,9 +168,64 @@ export interface SynthesizerOptions {
 export async function createSynthesizer(options: SynthesizerOptions): Promise<Synthesizer> {
   if (!options.voice) return new SilentSynthesizer();
   return withVoicevoxStart(
-    () => VoicevoxSynthesizer.create({ baseUrl: options.voicevoxUrl, speaker: options.speaker, credit: options.credit, fetch: options.fetch }),
+    () =>
+      VoicevoxSynthesizer.create({
+        baseUrl: options.voicevoxUrl,
+        speaker: options.speaker,
+        credit: options.credit,
+        readings: options.readings,
+        fetch: options.fetch,
+      }),
     { command: options.startCommand, baseUrl: options.voicevoxUrl, onStart: options.onStart, fetch: options.fetch },
   );
+}
+
+/** 読み上げ文 1 文分の読みの確認結果 */
+export interface InspectedSentence extends SpeechUnit, SpokenText {
+  /** 読みを確かめてほしい理由(誤読の候補)。なければ空 */
+  reasons: string[];
+}
+
+/** 台本の全ての読み上げ文を、描画と同じ単位で VOICEVOX に通し、読みを調べる */
+export async function inspectReadings(script: VideoScript, synth: VoicevoxSynthesizer): Promise<InspectedSentence[]> {
+  const inspected: InspectedSentence[] = [];
+  for (const unit of speechUnits(script)) {
+    const spoken = await synth.inspect(unit.text);
+    inspected.push({ ...unit, ...spoken, reasons: reviewReasons(spoken.sent, spoken.kana) });
+  }
+  return inspected;
+}
+
+/** check が確かめた読みを、台本と同じ場所の checked-readings.json に保存する */
+export async function saveCheckedReadings(
+  report: string,
+  inspected: InspectedSentence[],
+  engine: CheckedReadings["engine"],
+): Promise<string> {
+  const record: CheckedReadings = {
+    version: 1,
+    checkedAt: new Date().toISOString(),
+    engine,
+    sentences: inspected.map(({ at, text, sent, reading }) => ({ at, text, sent, reading })),
+  };
+  const file = checkedReadingsFile(report);
+  await writeFile(file, `${JSON.stringify(record, null, 2)}\n`);
+  return file;
+}
+
+/**
+ * 描画の前に、全ての読み上げ文の読みが check で確かめた読みと一致するかを照らし合わせる。
+ * 確認していない文や読みが違う文があればエラーにする。照らし合わせたクエリで音声を作るので、
+ * 動画の読みは check で表示した読みと必ず一致する。
+ */
+export async function verifyReadings(report: string, script: VideoScript, synth: VoicevoxSynthesizer): Promise<number> {
+  const file = checkedReadingsFile(report);
+  const checked = await loadCheckedReadings(file);
+  if (!checked) throw new Error(mismatchMessage([], file, false));
+  const inspected = await inspectReadings(script, synth);
+  const mismatches = compareReadings(inspected, checked);
+  if (mismatches.length > 0) throw new Error(mismatchMessage(mismatches, file, true));
+  return inspected.length;
 }
 
 /** 出力先を作り、中身を git の管理対象から外す(pytest のキャッシュと同じく、.gitignore に * を書く)。 */
@@ -206,6 +276,8 @@ export interface RenderInput {
   facts: SessionFacts;
   author: Author;
   persona?: { id: string; name: string };
+  /** 描画に使う読みの指定(script.json に記録し、描画し直しても同じ読みにする) */
+  readings?: Readings;
 }
 
 export interface RenderPipelineOptions {
@@ -247,6 +319,7 @@ export async function renderReport(input: RenderInput, options: RenderPipelineOp
     author: input.author,
     ...(input.persona ? { persona: input.persona } : {}),
     voice: voice ? { enabled: true, ...voice } : { enabled: false },
+    ...(input.readings ? { readings: input.readings } : {}),
     facts: input.facts,
     script: input.script,
   };
