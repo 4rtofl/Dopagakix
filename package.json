@@ -22,7 +22,8 @@
   "files": [
     "dist",
     ".claude/skills/video-report",
-    "examples"
+    "examples",
+    "scripts/sandbox"
   ],
   "engines": {
     "node": ">=22"

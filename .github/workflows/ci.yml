@@ -79,6 +79,18 @@ jobs:
           streams=$(ffprobe -v error -show_entries stream=codec_name,width,height -of csv=p=0 "$out")
           echo "$streams"
           grep -q "^h264,1080,1920" <<< "$streams"
+      - name: 同梱の会話の要約を確かめ、動画を作る
+        run: |
+          example="$(npm root -g)/dopagakix/examples/conversation.example.json"
+          # 警告があれば失敗にする(同梱の例は、警告のない台本にしておく)
+          dopagakix check "$example" --no-voice --persona zundamon --json > "$RUNNER_TEMP/conversation-check.json"
+          node -e 'const r = require(process.argv[1]); if (r.kind !== "conversation" || r.issues.length) { console.error(r.issues); process.exit(1); }' "$RUNNER_TEMP/conversation-check.json"
+          out="$RUNNER_TEMP/conversation/summary.mp4"
+          dopagakix render "$example" --no-voice --fps 2 -o "$out" --work-dir "$RUNNER_TEMP/conversation-work"
+          test "$(ls "$RUNNER_TEMP/conversation")" = "summary.mp4"
+          streams=$(ffprobe -v error -show_entries stream=codec_name,width,height -of csv=p=0 "$out")
+          echo "$streams"
+          grep -q "^h264,1080,1920" <<< "$streams"
 
   voicevox:
     name: VOICEVOX との結合
@@ -112,7 +124,7 @@ jobs:
           npx playwright-core install --with-deps --only-shell chromium
       - name: 実エンジンを使うテスト
         # BGM 付き・効果音付きの動画で、読み上げ中に BGM が下がること、効果音が決めた時刻に鳴り読み上げと重ならないことも確かめる
-        run: npx vitest run test/tts.test.ts test/readings.test.ts test/cli.test.ts test/environment.test.ts test/bgm.test.ts test/sfx.test.ts
+        run: npx vitest run test/tts.test.ts test/readings.test.ts test/cli.test.ts test/conversation.test.ts test/environment.test.ts test/bgm.test.ts test/sfx.test.ts
       - name: 読み上げ付きの動画を作る
         run: |
           out="$RUNNER_TEMP/voiced/summary.mp4"
@@ -161,6 +173,25 @@ jobs:
           ./.github/scripts/check-loudness.sh "$RUNNER_TEMP/voiced-sfx/audio.wav" -1.5
           ./.github/scripts/check-loudness.sh "$out" -1
           grep -q '"credit": "効果音: 2 kHz の合成音"' "$RUNNER_TEMP/voiced-sfx/script.json"
+      - name: 会話の要約の動画を作る
+        run: |
+          # サンドボックスでの手順(docs/sandbox.md)と同じく、作業フォルダーで check --json してから、出力先に動画だけを書く
+          work="$RUNNER_TEMP/conversation-work"
+          out="$RUNNER_TEMP/conversation/summary.mp4"
+          mkdir -p "$work"
+          cp examples/conversation.example.json "$work/conversation.json"
+          node dist/cli.js check "$work/conversation.json" --json --speaker 3 > "$work/check.json"
+          node -e '
+            const r = require(process.argv[1]);
+            console.log(`警告 ${r.issues.length} 件、読み ${r.readings.sentences.length} 文(要確認 ${r.readings.review} 文)`);
+            if (r.kind !== "conversation" || r.issues.length || r.readings.status !== "checked") process.exit(1);
+          ' "$work/check.json"
+          node dist/cli.js render "$work/conversation.json" --speaker 3 --fps 4 -o "$out" --work-dir "$work" --timezone Asia/Tokyo
+          test "$(ls "$RUNNER_TEMP/conversation")" = "summary.mp4"
+          audio=$(ffprobe -v error -select_streams a -show_entries stream=codec_name -of csv=p=0 "$out")
+          test "$audio" = "aac"
+          ./.github/scripts/check-loudness.sh "$work/audio.wav" -1.5
+          ./.github/scripts/check-loudness.sh "$out" -1
       - name: 作った動画を保存する
         if: always()
         uses: actions/upload-artifact@v7
@@ -183,6 +214,14 @@ jobs:
         with:
           name: voiced-sfx-sample
           path: ${{ runner.temp }}/voiced-sfx/summary.mp4
+          retention-days: 7
+          if-no-files-found: ignore
+      - name: 会話の要約の動画を保存する
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: conversation-sample
+          path: ${{ runner.temp }}/conversation/summary.mp4
           retention-days: 7
           if-no-files-found: ignore
       - name: エンジンのログ
