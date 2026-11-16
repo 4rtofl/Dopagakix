@@ -11,6 +11,8 @@ export interface TemplateInput {
   facts: SessionFacts;
   scenes: TimedScene[];
   credit?: string;
+  /** BGM のクレジット。最終ページにそのまま表示する(下部の柱は幅が足りないため出さない) */
+  bgmCredit?: string;
   /** 読み上げなし(字幕のみ)。柱に「音声なし」と出し、無音が意図したものだと分かるようにする */
   silent?: boolean;
   /** 台本の書き手。agent なら作業をした AI エージェント自身 */
@@ -189,6 +191,7 @@ function closingScene(
   script: VideoScript,
   facts: SessionFacts,
   credit: string | undefined,
+  bgmCredit: string | undefined,
   author: Author,
   timeZone?: string,
 ): string {
@@ -205,6 +208,7 @@ function closingScene(
       ? `報告: 作業をした AI エージェント${models}による自己報告。数値はセッションログから自動集計`
       : "報告: 手動で作成。数値はセッションログから自動集計",
     credit ? `音声: ${credit}` : undefined,
+    bgmCredit,
     `セッション ${facts.sessionId?.slice(0, 8) ?? "-"} ・ ${formatDateTime(facts.endTime, timeZone) || "-"}`,
   ]
     .filter(Boolean)
@@ -442,13 +446,13 @@ const PAGE_SCRIPT = String.raw`
 
 /** 動画 1 本分のページを作る。フォントは /fonts/ 以下から読み込む前提。 */
 export function buildHtml(input: TemplateInput): string {
-  const { script, facts, scenes, credit, silent, author, timeZone } = input;
+  const { script, facts, scenes, credit, bgmCredit, silent, author, timeZone } = input;
   const bodies = {
     opening: openingScene(script, facts, timeZone),
     work: workScene(script, facts),
     verification: verificationScene(script),
     decisions: decisionsScene(script),
-    closing: closingScene(script, facts, credit, author, timeZone),
+    closing: closingScene(script, facts, credit, bgmCredit, author, timeZone),
   };
   const sections = scenes
     .map((scene) => `<section class="scene" data-kind="${scene.kind}"><div class="content">${bodies[scene.kind]}</div></section>`)

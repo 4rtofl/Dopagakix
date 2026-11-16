@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { describeBgm, probeBgm } from "./audio/bgm.js";
 import { narrationBudget, SENTENCE_LIMIT } from "./script/check.js";
 import { withVoicevoxStart } from "./tts/start.js";
 import { creditFor, VoicevoxClient } from "./tts/voicevox.js";
@@ -48,7 +49,19 @@ export async function checkEnvironment(options) {
     items.push(probe.status === 0
         ? { name: "ffmpeg", status: "ok", detail: probe.stdout.split("\n")[0].trim() }
         : { name: "ffmpeg", status: "missing", detail: `${ffmpeg} を実行できません。ffmpeg をインストールしてください` });
+    items.push(await bgmItem(options.bgm));
     return items;
+}
+/** BGM の状態。設定した曲ファイルが無い・読めない場合は、描画できないので不足とする */
+async function bgmItem(bgm) {
+    if (!bgm)
+        return { name: "BGM", status: "ok", detail: "なし" };
+    try {
+        return { name: "BGM", status: "ok", detail: describeBgm(await probeBgm(bgm)) };
+    }
+    catch (error) {
+        return { name: "BGM", status: "missing", detail: error.message.replaceAll("\n", " ") };
+    }
 }
 function formatMinutes(minutes) {
     if (minutes === undefined)
