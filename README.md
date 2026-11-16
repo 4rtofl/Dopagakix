@@ -19,8 +19,8 @@ Claude Code に「動画で報告して」と頼むと、エージェントが�
  └─ エージェント(Claude Code)が video-report スキルを使う
      1. dopagakix prepare … 画面に出す数値をセッションログから集計し、口調・長さの目安と環境を表示
      2. 台本 report.json を書く … 文章の部分だけ。そのセッションで自分がした作業をもとに書く
-     3. dopagakix check   … 形式・口調・長さ・読み上げにくい表記・数値との食い違いを確認
-     4. dopagakix render  … VOICEVOX で読み上げ → HTML/CSS → Chromium で 1 コマずつ撮影 → ffmpeg → summary.mp4
+     3. dopagakix check   … 形式・口調・長さ・読み上げにくい表記・数値との食い違いと、全文の読みを確認
+     4. dopagakix render  … check で確かめた読みで VOICEVOX が読み上げ → HTML/CSS → Chromium で 1 コマずつ撮影 → ffmpeg → summary.mp4
  └─ mp4 を指示者に渡す
 ```
 
@@ -103,7 +103,8 @@ Claude Code で作業を終えたら、「動画で報告して」「動画に�
 | ファイル | 内容 |
 |----------|------|
 | `report.json` | エージェントが書いた台本 |
-| `script.json` | 描画に使った台本と数値、読み上げの有無と話者の記録。`dopagakix render <この script.json>` で同じ内容のまま作り直せます(話者を変える、など) |
+| `checked-readings.json` | `check` で確かめた読み上げ文の読み。`render` はこれと照らし合わせます([読み方の確認](#読み方の確認)) |
+| `script.json` | 描画に使った台本と数値、読みの指定、読み上げの有無と話者の記録。`dopagakix render <この script.json>` で同じ内容のまま作り直せます(話者を変える、など) |
 | `narration.wav` | 読み上げ音声 |
 | `audio.wav` | 仕上げた音声(BGM を混ぜ、音量を -16 LUFS にそろえたもの)。動画にはこれを使います |
 | `timeline.json` | シーンと字幕の時刻、BGM の設定、音量の測定値 |
@@ -131,6 +132,7 @@ Claude Code で作業を終えたら、「動画で報告して」「動画に�
 | `DOPAGAKIX_BGM` | なし | BGM の曲ファイル([BGM](#bgm)) |
 | `DOPAGAKIX_BGM_CREDIT` | なし | BGM のクレジット。最終ページにそのまま表示します |
 | `DOPAGAKIX_BGM_VOLUME` | `0` | BGM の音量。基準(-30 LUFS)からの増減(dB) |
+| `DOPAGAKIX_READINGS` | `<git のルート>/.dopagakix/readings.json` | プロジェクトの読みの辞書([読み方の確認](#読み方の確認)) |
 | `DOPAGAKIX_REQUIRE_VOICE` | なし | `1` にすると `--no-voice`(字幕のみ)をエラーにします |
 | `DOPAGAKIX_CHROMIUM` | 自動探索 | 描画に使う Chromium の実行ファイル |
 | `FFMPEG_PATH` | `ffmpeg` | ffmpeg の実行ファイル |
@@ -202,6 +204,24 @@ Claude Code で作業を終えたら、「動画で報告して」「動画に�
 
 ずんだもんの口調は、公式プロフィール([zunko.jp](https://zunko.jp/))に記載がないため、二次情報([pixiv 百科事典](https://dic.pixiv.net/a/ずんだもん))に基づいています。口調はキャラクター性の利用と見る余地があるため、扱いは [VOICEVOX とキャラクターの規約](#voicevox-とキャラクターの規約) を参照してください。
 
+### 読み方の確認
+
+VOICEVOX は漢字や英字を誤って読むことがあります(「話速」をハナシソク、「README」をアルファベット 1 文字ずつ、など)。完成した動画を聞いてから作り直さずに済むよう、描画の前に全文の読みを確かめます。
+
+- `check` は、全ての読み上げ文を VOICEVOX に通し、文ごとの読み(カタカナ)を表示します。英字の語を 1 文字ずつ読んでいる文と、文脈で読みが変わる字(「行」)を含む文には「要確認」を付けます。確かめるには VOICEVOX が必要で、接続できなければエラー(終了コード 1)にします。
+- 誤読は、台本の `readings` に「表記: 読み」で書いて直します。置き換えるのは VOICEVOX に送る文だけで、字幕と画面の文字は元の表記のままです。長い表記から順に置き換えるので、文脈で読みが変わる語は前後を含めて書きます(`"重複した行": "重複したぎょう"`)。1 文字の表記は `check` で警告します。
+- 読みの指定は、組み込みの一覧(README・npm・JSON・ffmpeg・話速・行末・他の など)、プロジェクトの辞書、台本の `readings` を合わせて使います(後のものが優先)。プロジェクトの辞書は既定で `<git のルート>/.dopagakix/readings.json` で、同じ形の JSON オブジェクトを書いてコミットすれば、チームで共有できます。場所は `DOPAGAKIX_READINGS` で変えられます。
+- `check` は確かめた読みを台本と同じ場所の `checked-readings.json` に保存します。`render` は文ごとの読みをこれと照らし合わせ、すべて一致したときだけ、照らし合わせたのと同じ内容で音声を作ります。確認していない文や読みが違う文(`check` の後に台本を直した、エンジンを更新した、など)があれば、`check` のやり直しを求めるエラーにします。比べるのは読みだけなので、話者を変えて描画し直す場合は、読みが同じなら確認をやり直さなくて構いません。
+- `script.json` には、描画に使った読みの指定(3 か所を合わせた結果)を記録し、描画し直しても同じ読みにします。
+- VOICEVOX のユーザー辞書は使いません(エンジン全体の辞書を変えるため)。抑揚(アクセント)は指定できません。
+
+```json
+{
+  "README": "リードミー",
+  "冪等": "べきとう"
+}
+```
+
 ## VOICEVOX とキャラクターの規約
 
 生成した動画の音声には、本ツールのライセンスとは別に、次の規約が適用されます(2026 年 10 月 14 日に確認。規約は変わることがあるため、使う前に原文を確認してください)。
@@ -229,8 +249,8 @@ Claude Code で作業を終えたら、「動画で報告して」「動画に�
 | コマンド | 内容 |
 |----------|------|
 | `dopagakix prepare` | 出力先を作り、台本を書くための情報(画面に出る数値、口調、文字数の目安、環境、次に実行するコマンド)を表示する |
-| `dopagakix check <report.json>` | 台本を確かめる。描画はしない |
-| `dopagakix render <report.json>` | 動画を作る。完成した mp4 のパスだけを標準出力に出す(進捗は標準エラー) |
+| `dopagakix check <report.json>` | 台本と全文の読みを確かめ、確かめた読みを保存する。描画はしない |
+| `dopagakix render <report.json>` | 動画を作る。`check` で確かめた読みと一致しなければ止まる。完成した mp4 のパスだけを標準出力に出す(進捗は標準エラー) |
 | `dopagakix digest` | セッションログを時系列のダイジェストにする(エージェントが作業を振り返る用。既定で 3 万文字以内) |
 | `dopagakix sessions` | プロジェクトのセッションログを新しい順に表示する |
 | `dopagakix speakers` | VOICEVOX の話者とスタイル ID を表示する |
@@ -298,7 +318,7 @@ GitHub Actions(`.github/workflows/ci.yml`)で、push のたびに次の 3 つを
 |--------|------|
 | テスト | Node.js 22・24・26 で型検査と `npm test`。Chromium と ffmpeg を入れ、描画の結合テストを省略させない |
 | git からの導入 | 利用者と同じく git から `npm install -g` で導入し、スキルの導入と同梱サンプルの描画を確かめる |
-| VOICEVOX との結合 | VOICEVOX ENGINE(Docker イメージ `cpu-0.25.2`)を起動し、実エンジンのテストと、読み上げ付きの動画(BGM なし・合成音の BGM 付き)の作成を行う。全体の音量と、読み上げ中に BGM が下がることも確かめる。作った動画は成果物(`voiced-sample`・`voiced-bgm-sample`)として 7 日間保存する |
+| VOICEVOX との結合 | VOICEVOX ENGINE(Docker イメージ `cpu-0.25.2`)を起動し、実エンジンのテスト(読みの確認と `check` → `render` の流れを含む)と、読み上げ付きの動画(BGM なし・合成音の BGM 付き)の作成を行う。全体の音量と、読み上げ中に BGM が下がることも確かめる。作った動画は成果物(`voiced-sample`・`voiced-bgm-sample`)として 7 日間保存する |
 
 結合テストは、必要な道具がない環境では省略されます。CI では環境変数 `DOPAGAKIX_TEST_REQUIRE_RENDER` / `DOPAGAKIX_TEST_REQUIRE_VOICEVOX` を `1` にして、準備に失敗したときに省略されたまま成功に見えないようにしています。
 
@@ -312,7 +332,7 @@ src/
 ├── persona.ts             キャラクターの口調
 ├── redact.ts              秘匿情報のマスク
 ├── transcript/            セッションログの探索・解析・ダイジェスト化
-├── script/                台本のスキーマ・整形・確認(check)
+├── script/                台本のスキーマ・整形・確認(check)・読みの指定と照合
 ├── tts/                   VOICEVOX・無音合成・WAV 処理
 ├── audio/                 音声の仕上げ(BGM の合成・音量の調整)
 └── video/                 タイムライン・HTML テンプレート・描画

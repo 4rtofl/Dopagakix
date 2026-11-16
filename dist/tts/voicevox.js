@@ -1,3 +1,4 @@
+import { applyReadings, readingOf } from "../script/readings.js";
 import { parseWav } from "./wav.js";
 export const DEFAULT_VOICEVOX_URL = "http://127.0.0.1:50021";
 /** ずんだもん(ノーマル) */
@@ -43,6 +44,10 @@ export class VoicevoxClient {
     async initializeSpeaker(speaker) {
         await this.request(`/initialize_speaker?speaker=${speaker}&skip_reinit=true`, { method: "POST" });
     }
+    /** ユーザー辞書の一覧(読みの確認がエンジンの状態を変えていないことを確かめるのに使う) */
+    async userDict() {
+        return (await (await this.request("/user_dict")).json());
+    }
     async audioQuery(text, speaker) {
         // enable_katakana_english: 英単語をカタカナ読みに変換させる(無効だと 1 文字ずつ読み上げる)
         const params = new URLSearchParams({ text, speaker: String(speaker), enable_katakana_english: "true" });
@@ -76,10 +81,14 @@ export class VoicevoxSynthesizer {
     client;
     voice;
     credit;
-    constructor(client, voice, credit) {
+    readings;
+    /** 送る文ごとの AudioQuery。読みを確かめたクエリのまま音声を作るため、一度作ったものを使い回す */
+    queries = new Map();
+    constructor(client, voice, credit, readings) {
         this.client = client;
         this.voice = voice;
         this.credit = credit;
+        this.readings = readings;
     }
     /** エンジンへの接続と話者の存在を確かめてから作る。 */
     static async create(options = {}) {
@@ -92,10 +101,32 @@ export class VoicevoxSynthesizer {
             throw new VoicevoxError(`話者 ID ${speaker} はこのエンジンにありません。\`dopagakix speakers\` で一覧を確認してください。`);
         }
         await client.initializeSpeaker(speaker);
-        return new VoicevoxSynthesizer(client, { speaker, name: owner.name, style: style.name }, options.credit ?? creditFor(owner.name));
+        return new VoicevoxSynthesizer(client, { speaker, name: owner.name, style: style.name }, options.credit ?? creditFor(owner.name), options.readings ?? {});
+    }
+    /** エンジンのバージョン */
+    async engineVersion() {
+        return this.client.version();
+    }
+    query(sent) {
+        let query = this.queries.get(sent);
+        if (!query) {
+            query = this.client.audioQuery(sent, this.voice.speaker);
+            // 失敗したものは使い回さない
+            query.catch(() => this.queries.delete(sent));
+            this.queries.set(sent, query);
+        }
+        return query;
+    }
+    /** 読み上げ文を VOICEVOX がどう読むかを調べる。ここで調べたクエリで synthesize が音声を作る */
+    async inspect(text) {
+        const sent = applyReadings(text, this.readings);
+        const kana = (await this.query(sent)).kana;
+        if (typeof kana !== "string")
+            throw new VoicevoxError("VOICEVOX エンジンの応答(/audio_query)に読み(kana)がありません。");
+        return { sent, kana, reading: readingOf(kana) };
     }
     async synthesize(text, speed) {
-        const query = await this.client.audioQuery(text, this.voice.speaker);
+        const query = structuredClone(await this.query(applyReadings(text, this.readings)));
         query.speedScale = speed;
         // 文頭・文末の無音は字幕の切り替えに合わせて自前で入れるため短くする
         query.prePhonemeLength = 0.05;

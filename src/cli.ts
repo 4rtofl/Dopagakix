@@ -12,20 +12,24 @@ import {
   createSynthesizer,
   DEFAULT_OUT_DIR,
   digestSession,
+  inspectReadings,
   loadReport,
   loadSession,
   prepareOutputRoot,
   renderReport,
   resolveRenderPaths,
+  saveCheckedReadings,
+  verifyReadings,
 } from "./pipeline.js";
-import { checkScript } from "./script/check.js";
+import { checkScript, type ScriptIssue } from "./script/check.js";
+import { BUILTIN_READINGS, loadProjectReadings, type ResolvedReadings, resolveReadings } from "./script/readings.js";
 import { STATUS_LABELS } from "./script/schema.js";
 import { installSkill, SKILL_NAME, skillsDir } from "./skill.js";
 import { DEFAULT_MAX_DIGEST_CHARS } from "./transcript/digest.js";
 import { type LocatedTranscript, type LocateOptions, listTranscripts } from "./transcript/locate.js";
 import { readTranscript } from "./transcript/parse.js";
 import { START_TIMEOUT_MS } from "./tts/start.js";
-import { DEFAULT_SPEAKER, DEFAULT_VOICEVOX_URL, VoicevoxClient } from "./tts/voicevox.js";
+import { DEFAULT_SPEAKER, DEFAULT_VOICEVOX_URL, VoicevoxClient, VoicevoxSynthesizer } from "./tts/voicevox.js";
 import { log, progress } from "./util/log.js";
 import { formatDateTime, formatStamp } from "./util/time.js";
 
@@ -200,6 +204,14 @@ function explicitArgs(command: Command, flags: object, keys: string[]): string[]
   return args;
 }
 
+/** 1 文字の表記の読みの指定は、意図しない箇所を置き換えやすいので警告する */
+function readingIssues(resolved: ResolvedReadings): ScriptIssue[] {
+  return resolved.singleChars.map(({ key, source }) => ({
+    at: `readings["${key}"]`,
+    message: `1 文字の表記の読みの指定(${source})は、意図しない箇所も置き換えます。前後を含めた表記で指定してください。`,
+  }));
+}
+
 const program = new Command()
   .name("dopagakix")
   .description("AI エージェントが書いた作業報告の台本から、指示者向けの縦型動画を作る")
@@ -240,6 +252,7 @@ withBgmOptions(
       onStart: engineStart.onStart,
     });
     const persona = await choosePersona(flags);
+    const project = await loadProjectReadings();
 
     await prepareOutputRoot(outRoot);
     const runDir = path.join(outRoot, `${formatStamp(new Date(), flags.timezone)}-${loaded.sessionId.slice(0, 8)}`);
@@ -264,6 +277,11 @@ withBgmOptions(
         ]),
         digestCommand: commandLine(["dopagakix", "digest", ...session, ...timezone, "-o", displayPath(path.join(runDir, "digest.md"))]),
         persona,
+        readings: {
+          builtin: Object.keys(BUILTIN_READINGS).length,
+          project: Object.keys(project.readings).length,
+          projectFile: project.file ? displayPath(project.file) : undefined,
+        },
         seconds: flags.seconds,
         environment,
         timeZone: flags.timezone,
@@ -279,7 +297,9 @@ withSecondsOption(
     withSessionOptions(
       program
         .command("check")
-        .description("台本を確かめる(形式、口調、長さ、読み上げにくい表記、数値との食い違い)。描画はしない")
+        .description(
+          "台本を確かめる(形式、口調、長さ、読み上げにくい表記、数値との食い違い、全文の読み)。確かめた読みは render が照らし合わせる。描画はしない",
+        )
         .argument("<report>", "台本(report.json)または script.json のパス"),
     ),
   ),
@@ -298,15 +318,54 @@ withSecondsOption(
   }
   const persona = await choosePersona(flags);
   const result = checkScript(report.raw, { persona, facts, seconds: flags.seconds });
+  const resolved = await resolveReadings(report.raw, report.readings);
+  const issues = [...result.issues, ...readingIssues(resolved)];
   const lines = [
     `形式: 正しい(「${report.script.title}」、${STATUS_LABELS[report.script.status]})`,
     `読み上げ文: ${result.sentences} 文、計 ${result.narrationChars} 文字(目安 ${result.budget} 文字、約 ${flags.seconds} 秒)`,
     `口調: ${persona ? `${persona.name}(文末を確認)` : "丁寧語"}`,
     `数値: ${compared}`,
-    result.issues.length > 0 ? `警告 ${result.issues.length} 件:` : "警告: なし",
-    ...result.issues.map((issue) => `- ${issue.at}: ${issue.message}`),
+    issues.length > 0 ? `警告 ${issues.length} 件:` : "警告: なし",
+    ...issues.map((issue) => `- ${issue.at}: ${issue.message}`),
   ];
+
+  if (!flags.voice) {
+    lines.push("読み: 省略(読み上げなし)");
+    process.stdout.write(`${lines.join("\n")}\n`);
+    return;
+  }
+  // 読みは VOICEVOX が決めるため、エンジンに通して確かめる。確かめた読みは render が照らし合わせる
+  let readingError: string | undefined;
+  try {
+    const synth = await createSynthesizer({ ...flags, readings: resolved.readings, startCommand: engineStart.command, onStart: engineStart.onStart });
+    if (!(synth instanceof VoicevoxSynthesizer)) throw new Error("VOICEVOX の合成器を作れませんでした。");
+    const engineVersion = await synth.engineVersion();
+    const inspected = await inspectReadings(report.raw, synth);
+    const review = inspected.filter((sentence) => sentence.reasons.length > 0).length;
+    lines.push(
+      "",
+      `読み(VOICEVOX ENGINE ${engineVersion}、${synth.voice.name}): ${inspected.length} 文${review > 0 ? `、うち要確認 ${review} 文` : ""}`,
+      ...inspected.flatMap((sentence) => [
+        `- ${sentence.reasons.length > 0 ? "[要確認] " : ""}${sentence.at}「${sentence.text}」`,
+        `  → ${sentence.reading}`,
+        ...(sentence.sent !== sentence.text ? [`  (VOICEVOX に送る文: ${sentence.sent})`] : []),
+        ...sentence.reasons.map((reason) => `  要確認: ${reason}`),
+      ]),
+      "",
+      "全文の読みを 1 文ずつ確かめてください。誤読があれば台本の readings で直し、もう一度 check を実行します。",
+    );
+    const saved = await saveCheckedReadings(reportPath, inspected, {
+      version: engineVersion,
+      speaker: synth.voice.speaker,
+      name: synth.voice.name,
+    });
+    log(`確かめた読みを保存しました(render はこの読みと照らし合わせます): ${saved}`);
+  } catch (error) {
+    readingError = (error as Error).message;
+    lines.push("", `読み: 確かめられませんでした(${readingError})`);
+  }
   process.stdout.write(`${lines.join("\n")}\n`);
+  if (readingError) throw new Error(`読み上げ文の読みを確かめられませんでした。${readingError}`);
 });
 
 type RenderCommandFlags = SessionFlags &
@@ -350,13 +409,24 @@ withBgmOptions(
     const bgm = bgmSetting ? await probeBgm(bgmSetting) : undefined;
     log(`BGM: ${bgm ? describeBgm(bgm) : "なし"}`);
 
+    const resolved = await resolveReadings(report.raw, report.readings);
     // 読み上げありで VOICEVOX に接続できなければ、ここで止める(字幕のみには切り替えない)
-    const synth = await createSynthesizer({ ...flags, startCommand: engineStart.command, onStart: engineStart.onStart });
+    const synth = await createSynthesizer({
+      ...flags,
+      readings: resolved.readings,
+      startCommand: engineStart.command,
+      onStart: engineStart.onStart,
+    });
     if (!flags.voice) log("読み上げ: なし(字幕のみ。動画の柱に「音声なし」と表示します)");
+    if (synth instanceof VoicevoxSynthesizer) {
+      // check で確かめた読みと一致しなければ、音声を作る前に止める
+      const count = await verifyReadings(reportPath, report.raw, synth);
+      log(`読み: check で確かめた読みと一致(${count} 文)`);
+    }
 
     const persona = await choosePersona(flags);
     log(`口調: ${persona?.name ?? "丁寧語"}`);
-    for (const issue of checkScript(report.raw, { persona, facts, seconds: flags.seconds }).issues) {
+    for (const issue of [...checkScript(report.raw, { persona, facts, seconds: flags.seconds }).issues, ...readingIssues(resolved)]) {
       log(`注意: ${issue.at}: ${issue.message}`);
     }
     const mismatch = flags.voice ? personaMismatch(report.persona, flags.speaker) : undefined;
@@ -377,6 +447,7 @@ withBgmOptions(
         author: report.author,
         persona: persona ? { id: persona.id, name: persona.name } : report.persona,
         bgm,
+        readings: resolved.readings,
       },
       {
         outFile,

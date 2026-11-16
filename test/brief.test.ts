@@ -30,6 +30,7 @@ const input = {
   checkCommand: "dopagakix check dopagakix-out/x/report.json --session 4e4e81c0",
   renderCommand: "dopagakix render dopagakix-out/x/report.json --session 4e4e81c0",
   digestCommand: "dopagakix digest --session 4e4e81c0 -o dopagakix-out/x/digest.md",
+  readings: { builtin: 9, project: 2, projectFile: ".dopagakix/readings.json" },
   seconds: 60,
   environment: ok,
   timeZone: "Asia/Tokyo",
@@ -47,6 +48,9 @@ describe("buildBrief", () => {
     expect(text).toContain("  - ほか 2 件");
     expect(text).toContain("## 読み上げ文の口調: ずんだもん");
     expect(text).toContain("全角 312 文字程度");
+    // 読みの指定の件数と書き方
+    expect(text).toContain("- 読みの指定: 組み込み 9 件、プロジェクトの辞書 2 件(.dopagakix/readings.json)。台本の readings が最も優先される。");
+    expect(text).toContain('"readings": { "重複した行": "重複したぎょう"');
     expect(text).not.toContain("不足しています");
   });
 
@@ -55,6 +59,11 @@ describe("buildBrief", () => {
     expect(text).toContain("## 読み上げ文の口調: 丁寧語");
     expect(text).toMatch(/^# 動画レポートの準備\n\n\*\*描画に必要なものが不足しています\(ffmpeg\)/);
     expect(text).toContain("- ffmpeg: [不足] なし");
+  });
+
+  it("git のリポジトリの外では、プロジェクトの辞書がないと示す", () => {
+    const text = buildBrief({ ...input, readings: { builtin: 9, project: 0 } });
+    expect(text).toContain("プロジェクトの辞書 0 件(git のリポジトリの外のため、なし)");
   });
 });
 
