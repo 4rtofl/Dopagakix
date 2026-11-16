@@ -213,6 +213,27 @@ describe("figureTiming", () => {
     expect(html.match(/<path class="stroke"/g)).toHaveLength(4);
   });
 
+  it("判断事項の題目と、流れ図の変更した段の名前に、蛍光ペンの下線を引く", async () => {
+    const script = { ...(await loadScript()), figure: flow };
+    const timeline = await buildTimeline(script, fakeSynth, { maxSeconds: 600, speed: 1, maxSpeed: 1 });
+    const html = buildHtml({ script, facts, scenes: timeline.scenes, author: "agent" });
+    expect(html).toContain('<div class="d-title"><span class="marker">');
+    expect(html).toContain('<span class="marker">形式を確かめる</span>');
+    // <style> を「セレクター { 宣言 }」の組に分け、.marker に当たる宣言を集める
+    const css = /<style>([\s\S]*?)<\/style>/.exec(html)![1]!.replace(/\/\*[\s\S]*?\*\//g, "");
+    const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(([, selector, body]) => ({
+      selectors: selector!.split(",").map((s) => s.trim()),
+      body: body!,
+    }));
+    const declarationsFor = (selector: string) =>
+      rules.filter((rule) => rule.selectors.includes(selector)).map((rule) => rule.body).join(";");
+    for (const selector of [".d-title .marker", ".step .marker"]) {
+      expect(declarationsFor(selector)).toMatch(/background:\s*linear-gradient\([^;]*var\(--marker\)/);
+      // 矢印の大きさなど、文字を押し込む指定が当たっていない
+      expect(declarationsFor(selector)).not.toMatch(/(^|[;\s])(width|height|display)\s*:/);
+    }
+  });
+
   it("before_after の HTML に変更前と変更後を出し、figure がなければ図解シーンを作らない", async () => {
     const script = { ...(await loadScript()), figure: beforeAfter };
     const timeline = await buildTimeline(script, fakeSynth, { maxSeconds: 600, speed: 1, maxSpeed: 1 });
