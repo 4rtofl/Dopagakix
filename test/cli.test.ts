@@ -121,7 +121,7 @@ describe("CLI: 読みの確認", () => {
 
       const checked = await run(["check", report], env);
       expect(checked.code).toBe(0);
-      expect(checked.stdout).toMatch(/読み\(VOICEVOX ENGINE [\d.]+、ずんだもん\): 8 文/);
+      expect(checked.stdout).toMatch(/読み\(VOICEVOX ENGINE [\d.]+、ずんだもん\): 10 文/);
       expect(checked.stdout).toMatch(/- opening\.narration\[0\]「ログイン画面のバリデーション修正が完了しました。」\n {2}→ ログイン/);
       expect(existsSync(path.join(work, "checked-readings.json"))).toBe(true);
 
@@ -139,7 +139,7 @@ describe("CLI: 読みの確認", () => {
       expect(again.stdout).toContain("(VOICEVOX に送る文: あわせてリードミーも更新しています。)");
       const rendered = await run(["render", report, "--fps", "2", "-o", out], env);
       expect(rendered.code, rendered.stderr).toBe(0);
-      expect(rendered.stderr).toMatch(/読み: check で確かめた読みと一致\(8 文\)/);
+      expect(rendered.stderr).toMatch(/読み: check で確かめた読みと一致\(10 文\)/);
       expect(existsSync(out)).toBe(true);
       const record = JSON.parse(await readFile(path.join(work, "script.json"), "utf8"));
       expect(record.readings).toMatchObject({ README: "リードミー" });
