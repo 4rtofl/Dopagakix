@@ -70,6 +70,8 @@ export const ScriptFileSchema = z.object({
         .optional(),
     /** 描画に使った読みの指定(組み込み・プロジェクト・台本を合わせた結果)。描画し直しても同じ読みにする */
     readings: VideoScriptSchema.shape.readings,
+    /** BGM の設定。描画し直すときも同じ BGM を使う(オプションや環境変数で指定すればそちらを優先) */
+    bgm: z.object({ file: z.string(), credit: z.string().optional(), volume: z.number() }).optional(),
     facts: SessionFactsSchema,
     script: VideoScriptSchema,
 });

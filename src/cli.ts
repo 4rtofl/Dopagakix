@@ -4,6 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { Command, InvalidArgumentError, Option } from "commander";
+import { type BgmFlags, describeBgm, parseVolume, probeBgm, resolveBgm } from "./audio/bgm.js";
 import { buildBrief, checkEnvironment } from "./brief.js";
 import { type Persona, personaMismatch, resolvePersona } from "./persona.js";
 import {
@@ -119,6 +120,26 @@ function withVideoDirOption(command: Command): Command {
   );
 }
 
+function volume(value: string): number {
+  try {
+    return parseVolume(value);
+  } catch {
+    throw new InvalidArgumentError("dB の数値を指定してください(例: -6)。");
+  }
+}
+
+/** BGM の設定。環境変数と script.json の記録は resolveBgm で扱う(優先順位: オプション > 環境変数 > script.json) */
+function withBgmOptions(command: Command): Command {
+  return command
+    .option(
+      "--bgm <file>",
+      "BGM の曲ファイル(mp3 / wav / ogg / m4a など)。環境変数 DOPAGAKIX_BGM でも可。曲は同梱しないので、利用者が用意する",
+    )
+    .option("--no-bgm", "BGM を付けない(環境変数や script.json で設定していても)")
+    .option("--bgm-credit <text>", "BGM のクレジット。最終ページにそのまま表示する(例: 音楽：魔王魂)。環境変数 DOPAGAKIX_BGM_CREDIT でも可")
+    .option("--bgm-volume <dB>", "BGM の音量。基準(-30 LUFS)からの増減。環境変数 DOPAGAKIX_BGM_VOLUME でも可(既定: 0)", volume);
+}
+
 function withSecondsOption(command: Command): Command {
   return command.option("--seconds <n>", "動画の長さの目安(秒)。読み上げ文の文字数の目安と、話速の調整に使う", positiveNumber, DEFAULT_SECONDS);
 }
@@ -170,11 +191,15 @@ function explicitArgs(command: Command, flags: object, keys: string[]): string[]
   const args: string[] = [];
   for (const key of keys) {
     if (command.getOptionValueSource(key) !== "cli") continue;
-    if (key === "voice") {
-      if (values.voice === false) args.push("--no-voice");
+    const flag = `--${key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`;
+    const value = values[key];
+    if (typeof value === "boolean") {
+      if (value === false) args.push(flag.replace(/^--/, "--no-"));
       continue;
     }
-    args.push(`--${key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`, String(values[key]));
+    // 負の数(--bgm-volume -6 など)も 1 つの引数で渡す
+    if (typeof value === "number") args.push(`${flag}=${value}`);
+    else args.push(flag, String(value));
   }
   return args;
 }
@@ -194,16 +219,19 @@ const program = new Command()
   .hook("preAction", (_program, action) => assertVoiceAllowed(action.opts<{ voice?: boolean }>().voice));
 
 type PrepareFlags = SessionFlags &
-  VoiceFlags & { credit?: string; videoDir?: string; seconds: number; outDir: string; timezone?: string; chromium?: string };
+  VoiceFlags &
+  BgmFlags & { credit?: string; videoDir?: string; seconds: number; outDir: string; timezone?: string; chromium?: string };
 
-withVideoDirOption(
-  withCreditOption(
-    withSecondsOption(
-      withVoiceOptions(
-        withSessionOptions(
-          program
-            .command("prepare")
-            .description("動画レポートの準備。出力先を作り、台本を書くのに必要な情報(画面に出る数値・口調・長さ・環境)を表示する"),
+withBgmOptions(
+  withVideoDirOption(
+    withCreditOption(
+      withSecondsOption(
+        withVoiceOptions(
+          withSessionOptions(
+            program
+              .command("prepare")
+              .description("動画レポートの準備。出力先を作り、台本を書くのに必要な情報(画面に出る数値・口調・長さ・環境)を表示する"),
+          ),
         ),
       ),
     ),
@@ -217,7 +245,12 @@ withVideoDirOption(
     const loaded = await loadSession(locateOptions(flags), [outRoot]);
     log(`ログ: ${loaded.file}(${FOUND_BY[loaded.how]})`);
     // 口調は話者名から決めるため、エンジンを起動する場合は先に起動しておく
-    const environment = await checkEnvironment({ ...flags, startCommand: engineStart.command, onStart: engineStart.onStart });
+    const environment = await checkEnvironment({
+      ...flags,
+      bgm: resolveBgm(flags),
+      startCommand: engineStart.command,
+      onStart: engineStart.onStart,
+    });
     const persona = await choosePersona(flags);
     const project = await loadProjectReadings();
 
@@ -240,7 +273,7 @@ withVideoDirOption(
           report,
           ...shared,
           ...timezone,
-          ...explicitArgs(command, flags, ["credit", "chromium", "videoDir"]),
+          ...explicitArgs(command, flags, ["credit", "chromium", "videoDir", "bgm", "bgmCredit", "bgmVolume"]),
         ]),
         digestCommand: commandLine(["dopagakix", "digest", ...session, ...timezone, "-o", displayPath(path.join(runDir, "digest.md"))]),
         persona,
@@ -337,18 +370,21 @@ withSecondsOption(
 
 type RenderCommandFlags = SessionFlags &
   VoiceFlags &
-  RenderFlags & { credit?: string; out?: string; videoDir?: string; seconds: number; timezone?: string };
+  RenderFlags &
+  BgmFlags & { credit?: string; out?: string; videoDir?: string; seconds: number; timezone?: string };
 
-withVideoDirOption(
-  withCreditOption(
-    withRenderOptions(
-      withSecondsOption(
-        withVoiceOptions(
-          withSessionOptions(
-            program
-              .command("render")
-              .description("台本から動画を作る。画面の数値はセッションログから集計する")
-              .argument("<report>", "台本(report.json)、または描画済みの script.json(記録された数値で描画し直す)"),
+withBgmOptions(
+  withVideoDirOption(
+    withCreditOption(
+      withRenderOptions(
+        withSecondsOption(
+          withVoiceOptions(
+            withSessionOptions(
+              program
+                .command("render")
+                .description("台本から動画を作る。画面の数値はセッションログから集計する")
+                .argument("<report>", "台本(report.json)、または描画済みの script.json(記録された数値で描画し直す)"),
+            ),
           ),
         ),
       ),
@@ -367,6 +403,11 @@ withVideoDirOption(
       facts = loaded.facts;
       log(`ログ: ${loaded.file}(${FOUND_BY[loaded.how]})`);
     }
+
+    // 曲ファイルが無い・読めない場合は、時間のかかる音声合成と描画の前に止める
+    const bgmSetting = resolveBgm(flags, process.env, report.bgm);
+    const bgm = bgmSetting ? await probeBgm(bgmSetting) : undefined;
+    log(`BGM: ${bgm ? describeBgm(bgm) : "なし"}`);
 
     const resolved = await resolveReadings(report.raw, report.readings);
     // 読み上げありで VOICEVOX に接続できなければ、ここで止める(字幕のみには切り替えない)
@@ -405,6 +446,7 @@ withVideoDirOption(
         facts,
         author: report.author,
         persona: persona ? { id: persona.id, name: persona.name } : report.persona,
+        bgm,
         readings: resolved.readings,
       },
       {
@@ -426,6 +468,7 @@ withVideoDirOption(
         `、撮影 ${result.stats.captured}/${result.stats.frames} フレーム)`,
     );
     if (result.credit) log(`クレジット表記: ${result.credit}(VOICEVOX の利用規約により必要です)`);
+    if (bgm?.credit) log(`BGM のクレジット: ${bgm.credit}`);
     process.stdout.write(`${result.outFile}\n`);
   });
 
