@@ -111,6 +111,11 @@ export async function prepareOutputRoot(dir) {
 }
 /** 保存先に置く動画の名前に使うタイトルの文字数。ファイル名の上限(多くのファイルシステムで 255 バイト)に収める */
 const TITLE_CHARS_IN_FILE_NAME = 40;
+/** 動画の保存先(--video-dir・DOPAGAKIX_VIDEO_DIR)の絶対パス */
+export function resolveVideoDir(dir) {
+    // 設定ファイル(.claude/settings.json の env など)に書いた値はシェルを通らず、~ が展開されない
+    return path.resolve(dir.replace(/^~(?=$|[\\/])/, () => os.homedir()));
+}
 /**
  * 動画と作業ファイル(narration.wav・timeline.json・script.json)の置き場所を決める。
  * -o を最優先し、保存先の指定があれば動画だけを「台本のフォルダ名-タイトル.mp4」としてそこに置く。
@@ -123,8 +128,7 @@ export function resolveRenderPaths(options) {
     const workDir = path.dirname(path.resolve(options.report));
     if (!options.videoDir)
         return { outFile: path.join(workDir, "summary.mp4"), workDir };
-    // 設定ファイル(.claude/settings.json の env など)に書いた値はシェルを通らず、~ が展開されない
-    const videoDir = path.resolve(options.videoDir.replace(/^~(?=$|[\\/])/, () => os.homedir()));
+    const videoDir = resolveVideoDir(options.videoDir);
     const title = Array.from(options.title.replace(/[\\/:*?"<>|\p{Cc}]/gu, "_"))
         .slice(0, TITLE_CHARS_IN_FILE_NAME)
         .join("")
