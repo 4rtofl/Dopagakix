@@ -142,7 +142,10 @@ jobs:
             ffmpeg -hide_banner -loglevel error -f lavfi -i sine=frequency=2000:duration=0.2 "$sfx/$kind.wav"
           done
           out="$RUNNER_TEMP/voiced-sfx/summary.mp4"
-          node dist/cli.js render examples/script.example.json --fps 4 --sfx-dir "$sfx" --sfx-credit "効果音: 2 kHz の合成音" -o "$out"
+          mkdir -p "$RUNNER_TEMP/voiced-sfx"
+          cp examples/script.example.json "$RUNNER_TEMP/voiced-sfx/script.json"
+          node dist/cli.js check "$RUNNER_TEMP/voiced-sfx/script.json"
+          node dist/cli.js render "$RUNNER_TEMP/voiced-sfx/script.json" --fps 4 --sfx-dir "$sfx" --sfx-credit "効果音: 2 kHz の合成音" -o "$out"
           ./.github/scripts/check-loudness.sh "$RUNNER_TEMP/voiced-sfx/audio.wav" -1.5
           ./.github/scripts/check-loudness.sh "$out" -1
           grep -q '"credit": "効果音: 2 kHz の合成音"' "$RUNNER_TEMP/voiced-sfx/script.json"
