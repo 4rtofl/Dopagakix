@@ -4,17 +4,18 @@ import { FIGURE_LIMITS, type Figure, type VideoScript } from "./schema.js";
 /** 画面に表示できる項目数 */
 export const LIMITS = { work: 5, verification: 4, decisions: 3, nextSteps: 3 } as const;
 
-function clean(text: string): string {
+/** 表示用に空白を整え、秘匿情報をマスクする */
+export function cleanText(text: string): string {
   return redactSecrets(text.replace(/\s+/g, " ").trim()).text;
 }
 
 function cleanLines(lines: string[]): string[] {
-  return lines.map(clean).filter(Boolean);
+  return lines.map(cleanText).filter(Boolean);
 }
 
 function normalizeFigure(figure: Figure | undefined): Figure | undefined {
   if (!figure) return undefined;
-  const title = clean(figure.title);
+  const title = cleanText(figure.title);
   const narration = cleanLines(figure.narration);
   if (figure.type === "before_after") {
     const before = cleanLines(figure.before).slice(0, FIGURE_LIMITS.sideLines);
@@ -24,8 +25,8 @@ function normalizeFigure(figure: Figure | undefined): Figure | undefined {
   }
   const steps = figure.steps
     .map((step) => {
-      const note = step.note === undefined ? "" : clean(step.note);
-      return { label: clean(step.label), ...(note ? { note } : {}), ...(step.changed ? { changed: true } : {}) };
+      const note = step.note === undefined ? "" : cleanText(step.note);
+      return { label: cleanText(step.label), ...(note ? { note } : {}), ...(step.changed ? { changed: true } : {}) };
     })
     .filter((step) => step.label)
     .slice(0, FIGURE_LIMITS.maxSteps);
@@ -39,11 +40,11 @@ function normalizeFigure(figure: Figure | undefined): Figure | undefined {
 export function normalizeScript(script: VideoScript): VideoScript {
   const figure = normalizeFigure(script.figure);
   return {
-    title: clean(script.title),
+    title: cleanText(script.title),
     status: script.status,
-    headline: clean(script.headline),
+    headline: cleanText(script.headline),
     opening: { narration: cleanLines(script.opening.narration) },
-    request: { summary: clean(script.request.summary), narration: cleanLines(script.request.narration) },
+    request: { summary: cleanText(script.request.summary), narration: cleanLines(script.request.narration) },
     work: {
       items: cleanLines(script.work.items).slice(0, LIMITS.work),
       narration: cleanLines(script.work.narration),
@@ -51,14 +52,14 @@ export function normalizeScript(script: VideoScript): VideoScript {
     ...(figure ? { figure } : {}),
     verification: {
       items: script.verification.items
-        .map((item) => ({ label: clean(item.label), result: item.result }))
+        .map((item) => ({ label: cleanText(item.label), result: item.result }))
         .filter((item) => item.label)
         .slice(0, LIMITS.verification),
       narration: cleanLines(script.verification.narration),
     },
     decisions: {
       items: script.decisions.items
-        .map((item) => ({ title: clean(item.title), detail: clean(item.detail) }))
+        .map((item) => ({ title: cleanText(item.title), detail: cleanText(item.detail) }))
         .filter((item) => item.title)
         .slice(0, LIMITS.decisions),
       narration: cleanLines(script.decisions.narration),
@@ -67,5 +68,6 @@ export function normalizeScript(script: VideoScript): VideoScript {
       items: cleanLines(script.next_steps.items).slice(0, LIMITS.nextSteps),
       narration: cleanLines(script.next_steps.narration),
     },
+    ...(script.readings ? { readings: script.readings } : {}),
   };
 }
