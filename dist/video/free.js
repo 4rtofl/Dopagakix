@@ -212,6 +212,7 @@ export function freeTheme(format) {
         base: format.base,
         partialToken: true,
         fontLoading: "computed",
+        seekOutside: true,
         head,
     };
 }

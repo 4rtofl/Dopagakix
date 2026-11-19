@@ -137,6 +137,31 @@ describe.runIf(hasChromium)("ページを開く(Chromium)", () => {
     }
   });
 
+  it("形式の CSS の動きは、シーンの外(題字など)に書いても、動画の時刻を入れて止める", async () => {
+    const formatDir = path.join(dir, "motion");
+    await mkdir(formatDir, { recursive: true });
+    await writeFile(path.join(formatDir, "style.css"), "@keyframes fade { from { opacity: 0; } to { opacity: 1; } } .mast-title { animation: fade 10s linear both; }");
+    await writeFile(path.join(formatDir, "format.json"), JSON.stringify({ kind: "format", version: 1, page: { mast: "動き" }, style: "style.css" }));
+    const file = path.join(formatDir, "video.json");
+    const json = JSON.parse(await readFile(example, "utf8"));
+    json.script.scenes = json.script.scenes.filter((scene: { type: string }) => scene.type !== "image");
+    await writeFile(file, JSON.stringify({ ...json, format: "format.json" }));
+    const opened = await openFree(file);
+    try {
+      const opacityAt = (t: number) =>
+        opened.page.evaluate((time) => {
+          window.__seek(time);
+          return Number(getComputedStyle(document.querySelector(".mast-title")!).opacity);
+        }, t);
+      expect(await opacityAt(5)).toBeCloseTo(0.5, 2);
+      await opened.page.waitForTimeout(300);
+      expect(await opacityAt(5)).toBeCloseTo(0.5, 2);
+      expect(await opacityAt(2.5)).toBeCloseTo(0.25, 2);
+    } finally {
+      await opened.close();
+    }
+  });
+
   it("最小まで縮めても収まらないシーンを知らせる", async () => {
     const file = path.join(dir, "overflow.json");
     const json = JSON.parse(await readFile(example, "utf8"));

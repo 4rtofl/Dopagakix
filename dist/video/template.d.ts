@@ -79,6 +79,11 @@ export interface PageTheme {
     partialToken?: boolean;
     /** 書体の読み込み。bundled=同梱の書体の名前と太さで読む / computed=ページの要素が使う書体をすべて読む */
     fontLoading: "bundled" | "computed";
+    /**
+     * シーンの外(題字や柱)の CSS のアニメーションも、動画の頭からの時刻を入れて止めるか(自由形式。形式の CSS が
+     * どこに動きを書いても、同じ入力から同じ映像にする)。作業報告と会話の要約はシーンの外に動きがないので入れない
+     */
+    seekOutside?: boolean;
     /** <style> の後に足す <head> の中身(形式の書体の @font-face、形式の CSS の読み込み) */
     head?: string;
 }

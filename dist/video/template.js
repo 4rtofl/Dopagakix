@@ -494,6 +494,16 @@ const COMPUTED_FONT_LOADS = String.raw `    const fonts = new Set();
       }
     }
     await Promise.all([...fonts].map((font) => document.fonts.load(font, text + extra)));`;
+/** シーンの外のアニメーションに、動画の頭からの時刻を入れて止める(自由形式) */
+const SEEK_OUTSIDE = String.raw `
+    for (const animation of document.getAnimations()) {
+      const target = animation.effect && animation.effect.target;
+      if (target && target.closest && target.closest(".scene")) continue;
+      animation.pause();
+      animation.currentTime = t * 1000;
+      const p = animation.effect.getComputedTiming().progress;
+      progress.push(p === null ? -1 : Math.round(p * 1000));
+    }`;
 /** ページ内で動くスクリプト。__seek(t) で時刻 t の状態を描き、同じ見た目かどうかの判定キーを返す。 */
 function pageScript(theme) {
     const m = theme.motion;
@@ -565,7 +575,7 @@ ${fontLoads}
       }
       captionOpacity = Math.round(clamp01((t - cue.start + CAPTION_LEAD) / ${m.caption.fade}) * fade * 100) / 100;
     }
-    caption.style.opacity = String(captionOpacity);
+    caption.style.opacity = String(captionOpacity);${theme.seekOutside ? SEEK_OUTSIDE : ""}
     return [index, fade, progress.join(","), cueIndex, captionOpacity].join("|");
   };
 })();

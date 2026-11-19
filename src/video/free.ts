@@ -265,6 +265,7 @@ export function freeTheme(format: ResolvedFormat): PageTheme {
     base: format.base,
     partialToken: true,
     fontLoading: "computed",
+    seekOutside: true,
     head,
   };
 }
