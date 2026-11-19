@@ -91,6 +91,32 @@ jobs:
           streams=$(ffprobe -v error -show_entries stream=codec_name,width,height -of csv=p=0 "$out")
           echo "$streams"
           grep -q "^h264,1080,1920" <<< "$streams"
+      - name: 同梱の自由形式と形式の例を確かめ、動画を作る
+        run: |
+          examples="$(npm root -g)/dopagakix/examples"
+          format="$examples/formats/intro/format.json"
+          # 警告があれば失敗にする(同梱の例は、既定の形式でも形式の例でも、警告のない台本にしておく)
+          ok='const r = require(process.argv[1]); if (r.kind !== process.argv[2] || r.issues.length) { console.error(r.issues); process.exit(1); }'
+          dopagakix check "$format" --json > "$RUNNER_TEMP/format-check.json"
+          node -e "$ok" "$RUNNER_TEMP/format-check.json" format
+          dopagakix check "$examples/free.example.json" --no-voice --persona zundamon --json > "$RUNNER_TEMP/free-check.json"
+          node -e "$ok" "$RUNNER_TEMP/free-check.json" free
+          dopagakix check "$examples/free.example.json" --no-voice --persona zundamon --json --format "$format" > "$RUNNER_TEMP/free-intro-check.json"
+          node -e "$ok" "$RUNNER_TEMP/free-intro-check.json" free
+          # 形式を作り始めるコマンドで作った定義も、警告なしで確かめられる
+          dopagakix format init "$RUNNER_TEMP/new-format" --name テスト
+          dopagakix check "$RUNNER_TEMP/new-format/format.json" --json > "$RUNNER_TEMP/new-format-check.json"
+          node -e "$ok" "$RUNNER_TEMP/new-format-check.json" format
+          for name in free intro; do
+            out="$RUNNER_TEMP/free-$name/summary.mp4"
+            args=()
+            if [ "$name" = intro ]; then args=(--format "$format"); fi
+            dopagakix render "$examples/free.example.json" --no-voice --fps 2 -o "$out" --work-dir "$RUNNER_TEMP/free-$name-work" "${args[@]}"
+            test "$(ls "$RUNNER_TEMP/free-$name")" = "summary.mp4"
+            streams=$(ffprobe -v error -show_entries stream=codec_name,width,height -of csv=p=0 "$out")
+            echo "$name: $streams"
+            grep -q "^h264,1080,1920" <<< "$streams"
+          done
 
   voicevox:
     name: VOICEVOX との結合
@@ -192,6 +218,45 @@ jobs:
           test "$audio" = "aac"
           ./.github/scripts/check-loudness.sh "$work/audio.wav" -1.5
           ./.github/scripts/check-loudness.sh "$out" -1
+      - name: 自由形式の動画を作る
+        run: |
+          # 同梱の例を、形式の例(色と CSS を変えたもの)と合成音の効果音で、読み上げ付きにする。
+          # check が台本と同じ場所に確かめた読みを残すので、例と画像を作業フォルダーに写す
+          work="$RUNNER_TEMP/free-work"
+          out="$RUNNER_TEMP/free/summary.mp4"
+          format="$GITHUB_WORKSPACE/examples/formats/intro/format.json"
+          mkdir -p "$work" "$RUNNER_TEMP/free-sfx"
+          cp examples/free.example.json "$work/free.json"
+          cp -r examples/images "$work/images"
+          for kind in page end; do
+            ffmpeg -hide_banner -loglevel error -f lavfi -i sine=frequency=2000:duration=0.2 "$RUNNER_TEMP/free-sfx/$kind.wav"
+          done
+          node dist/cli.js check "$work/free.json" --json --speaker 3 --format "$format" > "$work/check.json"
+          node -e '
+            const r = require(process.argv[1]);
+            console.log(`警告 ${r.issues.length} 件、読み ${r.readings.sentences.length} 文(要確認 ${r.readings.review} 文)`);
+            if (r.kind !== "free" || r.issues.length || r.readings.status !== "checked") { console.error(r.issues); process.exit(1); }
+          ' "$work/check.json"
+          node dist/cli.js render "$work/free.json" --speaker 3 --fps 4 --format "$format" \
+            --sfx-dir "$RUNNER_TEMP/free-sfx" --sfx-credit "効果音: 2 kHz の合成音" -o "$out" --work-dir "$work" 2> "$work/render.log"
+          cat "$work/render.log"
+          # 縮めても収まらないシーンと、止めた外部への読み込みがないこと
+          if grep -E "収まりません|外部への読み込みを止めました" "$work/render.log"; then exit 1; fi
+          test "$(ls "$RUNNER_TEMP/free")" = "summary.mp4"
+          streams=$(ffprobe -v error -show_entries stream=codec_name,width,height -of csv=p=0 "$out")
+          echo "$streams"
+          grep -q "^h264,1080,1920" <<< "$streams"
+          grep -q "^aac" <<< "$streams"
+          ./.github/scripts/check-loudness.sh "$work/audio.wav" -1.5
+          ./.github/scripts/check-loudness.sh "$out" -1
+          # ページの切り替えと「以上」で効果音を鳴らし、script.json に形式の定義のパスを残す
+          node -e '
+            const t = require(process.argv[1]);
+            const kinds = new Set(t.sfx.cues.map((c) => c.kind));
+            if (!kinds.has("page") || !kinds.has("end") || kinds.has("result")) { console.error(t.sfx.cues); process.exit(1); }
+            const s = require(process.argv[2]);
+            if (s.kind !== "free" || s.format !== process.argv[3] || !s.voice.enabled) { console.error(s.format); process.exit(1); }
+          ' "$work/timeline.json" "$work/script.json" "$format"
       - name: 作った動画を保存する
         if: always()
         uses: actions/upload-artifact@v7
@@ -222,6 +287,14 @@ jobs:
         with:
           name: conversation-sample
           path: ${{ runner.temp }}/conversation/summary.mp4
+          retention-days: 7
+          if-no-files-found: ignore
+      - name: 自由形式の動画を保存する
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: free-sample
+          path: ${{ runner.temp }}/free/summary.mp4
           retention-days: 7
           if-no-files-found: ignore
       - name: エンジンのログ
