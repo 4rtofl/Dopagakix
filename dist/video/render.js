@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { once } from "node:events";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -17,6 +18,22 @@ function fontDirectories() {
 }
 function even(n) {
     return Math.max(2, Math.round(n / 2) * 2);
+}
+/** 各シーンが、縮めた状態でなお本文の枠からあふれているか。調べたあとは最初のシーンを表示した状態に戻す */
+const OVERFLOW_PROBE = `(() => {
+  const main = document.querySelector("main");
+  const scenes = [...document.querySelectorAll(".scene")];
+  const result = scenes.map((scene, i) => {
+    scenes.forEach((el, j) => el.classList.toggle("active", i === j));
+    return scene.querySelector(".content").offsetHeight > main.clientHeight;
+  });
+  scenes.forEach((el, j) => el.classList.toggle("active", j === 0));
+  return result;
+})()`;
+/** ファイルが、フォルダーの中にあるか */
+function inside(root, file) {
+    const relative = path.relative(root, file);
+    return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
 }
 function startFfmpeg(args) {
     const ffmpeg = spawn(process.env.FFMPEG_PATH ?? "ffmpeg", args, { stdio: ["pipe", "ignore", "pipe"] });
@@ -40,24 +57,27 @@ async function write(stream, chunk, done) {
     await Promise.race([once(stream, "drain"), done]);
 }
 /**
- * HTML を Chromium で 1 フレームずつ描き、ffmpeg で H.264/AAC の mp4 にする。
- * アニメーションはページ側の __seek(t) で時刻を指定して止めた状態を撮るため、
- * 描画速度に左右されず毎回同じ結果になる。
+ * HTML を Chromium で開き、書体を読み込んで、あふれたシーンを縮める。ページのファイルは架空のオリジンから出し、
+ * それ以外の宛先へのリクエストはすべて止める。描画(renderVideo)と、テストでの撮影に使う。
  */
-export async function renderVideo(html, options) {
-    const fps = options.fps ?? 30;
-    const scale = options.scale ?? 1;
-    const width = even(VIDEO_WIDTH * scale);
-    const height = even(VIDEO_HEIGHT * scale);
+export async function openPage(html, options = {}) {
+    const viewport = options.size ?? { width: VIDEO_WIDTH, height: VIDEO_HEIGHT };
     const fonts = fontDirectories();
     const browser = await chromium.launch({
         executablePath: resolveChromium(options.chromiumPath),
         args: ["--force-color-profile=srgb", "--font-render-hinting=none", "--hide-scrollbars"],
     });
     try {
-        const page = await browser.newPage({ viewport: { width: VIDEO_WIDTH, height: VIDEO_HEIGHT } });
-        await page.route(`${ORIGIN}/**`, async (route) => {
+        const page = await browser.newPage({ viewport });
+        const blocked = [];
+        // 同じ入力からは、いつ、どのマシンで描画しても同じ映像にするため、架空のオリジン以外へのリクエストはすべて止める
+        // (形式の CSS から外部の URL を読ませない)。作業報告と会話の要約のページは外部を読まないので、映像は変わらない
+        await page.route("**/*", async (route) => {
             const url = new URL(route.request().url());
+            if (url.origin !== ORIGIN) {
+                blocked.push(url.href);
+                return route.abort("blockedbyclient");
+            }
             if (url.pathname === "/index.html") {
                 return route.fulfill({ body: html, contentType: "text/html; charset=utf-8" });
             }
@@ -68,14 +88,45 @@ export async function renderVideo(html, options) {
                 if (file.startsWith(root + path.sep))
                     return route.fulfill({ path: file });
             }
+            const listed = options.files?.[url.pathname];
+            if (listed)
+                return route.fulfill({ path: listed });
+            if (options.formatDir && url.pathname.startsWith("/format/")) {
+                const file = path.resolve(options.formatDir, ...url.pathname.slice("/format/".length).split("/").map(decodeURIComponent));
+                if (inside(options.formatDir, file) && existsSync(file))
+                    return route.fulfill({ path: file });
+            }
             return route.fulfill({ status: 404, body: "not found" });
         });
         await page.goto(`${ORIGIN}/index.html`);
         const fitScales = await page.evaluate(() => window.__prepare());
+        // 縮めた状態で、なお本文の枠からあふれるシーンを調べる(ページのスクリプトは変えず、調べたあとは最初のシーンに戻す)
+        // (変換器が関数に名前を付ける処理を足してもページで動くよう、文字列で渡す)
+        const overflows = (await page.evaluate(OVERFLOW_PROBE));
+        return { page, viewport, fitScales, overflows, blocked, close: () => browser.close() };
+    }
+    catch (error) {
+        await browser.close();
+        throw error;
+    }
+}
+/**
+ * HTML を Chromium で 1 フレームずつ描き、ffmpeg で H.264/AAC の mp4 にする。
+ * アニメーションはページ側の __seek(t) で時刻を指定して止めた状態を撮るため、
+ * 描画速度に左右されず毎回同じ結果になる。
+ */
+export async function renderVideo(html, options) {
+    const fps = options.fps ?? 30;
+    const scale = options.scale ?? 1;
+    const opened = await openPage(html, options);
+    const { page, viewport, fitScales, overflows, blocked } = opened;
+    const width = even(viewport.width * scale);
+    const height = even(viewport.height * scale);
+    try {
         // page.screenshot より CDP の高速モードの方が 3 倍ほど速い(圧縮率は下がるが、パイプで渡すだけなので問題ない)
         const cdp = await page.context().newCDPSession(page);
         // 縮小出力は撮影時に縮める(deviceScaleFactor < 1 は撮影サイズに反映されない)
-        const clip = { x: 0, y: 0, width: VIDEO_WIDTH, height: VIDEO_HEIGHT, scale: width / VIDEO_WIDTH };
+        const clip = { x: 0, y: 0, width: viewport.width, height: viewport.height, scale: width / viewport.width };
         const capture = async () => {
             const { data } = await cdp.send("Page.captureScreenshot", { format: "png", optimizeForSpeed: true, clip });
             return Buffer.from(data, "base64");
@@ -113,9 +164,9 @@ export async function renderVideo(html, options) {
             ffmpeg.stdin.end();
         }
         await ffmpeg.done;
-        return { frames: total, captured, width, height, fitScales };
+        return { frames: total, captured, width, height, fitScales, overflows, blocked };
     }
     finally {
-        await browser.close();
+        await opened.close();
     }
 }
