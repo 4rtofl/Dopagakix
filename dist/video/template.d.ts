@@ -1,8 +1,9 @@
 import type { FileChange, SessionFacts } from "../facts.js";
 import { type Author, type Figure, type VideoScript } from "../script/schema.js";
+import { type Motion } from "./motion.js";
+import { type ColorToken, type FontRole } from "./tokens.js";
 import { type TimedScene } from "./timeline.js";
-export declare const VIDEO_WIDTH = 1080;
-export declare const VIDEO_HEIGHT = 1920;
+export { VIDEO_HEIGHT, VIDEO_WIDTH } from "./tokens.js";
 export interface TemplateInput {
     script: VideoScript;
     facts: SessionFacts;
@@ -59,11 +60,39 @@ export interface FigureTiming {
  * - before_after: 変更前を最初に、変更後を 2 文目の読み上げ開始に合わせて出す(1 文だけなら、その文の中ほど)。
  * - flow: 段を上から順に出し、最後の段が読み上げの中ほどで出そろうよう間隔をとる。
  */
-export declare function figureTiming(figure: Figure, scene: TimedScene): FigureTiming;
+export declare function figureTiming(figure: Figure, scene: TimedScene, motion?: Motion): FigureTiming;
+export declare function figureScene(figure: Figure, scene: TimedScene | undefined, motion?: Motion): string;
+/** ページの見た目の設定。既定(DEFAULT_THEME)は作業報告と会話の要約の見た目そのもの */
+export interface PageTheme {
+    size: {
+        width: number;
+        height: number;
+    };
+    colors: Record<ColorToken, string>;
+    fonts: Record<FontRole, string>;
+    motion: Motion;
+    /** あふれたシーンを縮める最小の倍率 */
+    minScale: number;
+    /** paper=同梱の紙面のスタイルを使う / none=動作に要る最小のスタイルだけ */
+    base: "paper" | "none";
+    /** :root に --partial を書くか(自由形式だけ。作業報告と会話の要約の CSS を変えないため) */
+    partialToken?: boolean;
+    /** 書体の読み込み。bundled=同梱の書体の名前と太さで読む / computed=ページの要素が使う書体をすべて読む */
+    fontLoading: "bundled" | "computed";
+    /** <style> の後に足す <head> の中身(形式の書体の @font-face、形式の CSS の読み込み) */
+    head?: string;
+}
+export declare const DEFAULT_THEME: PageTheme;
+/** :root の色と書体のトークン */
+export declare function rootStyle(theme: PageTheme): string;
+/** 同梱の紙面のスタイル(:root のトークンを除く)。docs/design.md の方針で組んだもの */
+export declare function paperStyle(theme: PageTheme): string;
+/** base が none のときのスタイル。シーンの切り替え、縮小、登場の動き、字幕など、動作に要るものだけ */
+export declare function minimalStyle(theme: PageTheme): string;
 export interface PageInput {
-    /** 題字(例: 作業報告) */
-    mastTitle: string;
-    /** 題字の右に出す日付 */
+    /** 題字(例: 作業報告)。undefined なら題字を出さない */
+    mastTitle: string | undefined;
+    /** 題字の右に出す日付。題字も日付もなければ、題字の欄(header.masthead)ごと出さない */
     date: string;
     /** シーンごとの本文。scenes と同じ順 */
     bodies: string[];
@@ -74,6 +103,8 @@ export interface PageInput {
     labels: string[];
     /** 種類に固有のスタイル */
     extraStyle?: string;
+    /** 見た目の設定。省略すると作業報告と会話の要約の見た目(DEFAULT_THEME) */
+    theme?: PageTheme;
 }
 /** 動画 1 本分のページの枠(題字・本文・字幕・柱)を組む。フォントは /fonts/ 以下から読み込む前提。 */
 export declare function pageHtml(input: PageInput): string;

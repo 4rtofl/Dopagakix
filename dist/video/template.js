@@ -1,8 +1,9 @@
 import { STATUS_LABELS } from "../script/schema.js";
 import { formatDateTime } from "../util/time.js";
+import { DEFAULT_MOTION, enterDelay as motionDelay } from "./motion.js";
+import { DEFAULT_COLORS, DEFAULT_FONT_FAMILIES, VIDEO_HEIGHT, VIDEO_WIDTH } from "./tokens.js";
 import { splitCaption } from "./timeline.js";
-export const VIDEO_WIDTH = 1080;
-export const VIDEO_HEIGHT = 1920;
+export { VIDEO_HEIGHT, VIDEO_WIDTH } from "./tokens.js";
 /*
  * デザインの方針は docs/design.md を参照。
  * 「AI が作った UI」に見えやすい要素(暗色＋光彩、格子背景、紫系の色、カードの羅列、
@@ -59,10 +60,8 @@ export function titleClass(title) {
     const length = visualLength(title);
     return length <= 8 ? "title" : length <= 20 ? "title mid" : "title long";
 }
-/** 要素の登場の遅延(秒)。登場順 i の要素は i * ENTER_STEP + ENTER_OFFSET 秒後に現れ始める */
-const ENTER_STEP = 0.07;
-const ENTER_OFFSET = 0.06;
-const enterDelay = (i) => Math.round((i * ENTER_STEP + ENTER_OFFSET) * 1000) / 1000;
+/** 要素の登場の遅延(秒)。登場順 i の要素は i * enter.step + enter.offset 秒後に現れ始める(motion.ts) */
+const enterDelay = (i) => motionDelay(i, DEFAULT_MOTION);
 /** 表紙の「結果」の行の登場順 */
 const RESULT_ROW = 2;
 /** 表紙で「結果」の行が現れる時刻(シーン開始からの秒数。効果音を鳴らす時刻) */
@@ -158,8 +157,6 @@ function workScene(script, facts) {
 const FIGURE_FIRST = 0.2;
 /** 矢印を引き終えてから次の要素を出す */
 const ARROW_LEAD = 0.3;
-/** 字幕は読み上げより少し前に出る(PAGE_SCRIPT の CAPTION_LEAD)。図も字幕に合わせる */
-const FIGURE_CUE_LEAD = 0.1;
 const FLOW_GAP = { min: 0.25, max: 1.2 };
 const ms = (seconds) => Math.round(seconds * 1000) / 1000;
 /**
@@ -168,7 +165,9 @@ const ms = (seconds) => Math.round(seconds * 1000) / 1000;
  * - before_after: 変更前を最初に、変更後を 2 文目の読み上げ開始に合わせて出す(1 文だけなら、その文の中ほど)。
  * - flow: 段を上から順に出し、最後の段が読み上げの中ほどで出そろうよう間隔をとる。
  */
-export function figureTiming(figure, scene) {
+export function figureTiming(figure, scene, motion = DEFAULT_MOTION) {
+    // 字幕は読み上げより少し前に出る(motion.caption.lead)。図も字幕に合わせる
+    const FIGURE_CUE_LEAD = motion.caption.lead;
     const cues = scene.cues.map((cue) => ({ start: cue.start - scene.start, end: cue.end - scene.start }));
     if (figure.type === "before_after") {
         // 字幕は長い文を分けて表示するので、1 文目が何枚の字幕になったかを数えて 2 文目の先頭を探す
@@ -199,8 +198,8 @@ function arrow(cls, at) {
 }
 /** 指定した時刻(シーンの開始からの秒)に、下からフェードインさせる */
 const enterAt = (cls, at) => `class="enter ${cls}" style="animation-delay:${ms(at)}s"`;
-function figureScene(figure, scene) {
-    const timing = figureTiming(figure, scene ?? { kind: "figure", start: 0, end: 0, cues: [] });
+export function figureScene(figure, scene, motion = DEFAULT_MOTION) {
+    const timing = figureTiming(figure, scene ?? { kind: "figure", start: 0, end: 0, cues: [] }, motion);
     if (figure.type === "before_after") {
         const side = (cls, label, lines, at) => `<div ${enterAt(`ba-side ${cls}`, at)}><div class="ba-label">${label}</div>` +
             `<ul class="ba-lines">${lines.map((line) => `<li>${escapeHtml(line)}</li>`).join("")}</ul></div>`;
@@ -265,24 +264,41 @@ function closingScene(script, facts, credit, bgmCredit, sfxCredit, author, timeZ
     <div ${enter("end-mark", items.length + 1)}>以上</div>
     <div ${enter("credits", items.length + 2)}>${credits}</div>`;
 }
-const STYLE = String.raw `
-:root {
-  --paper: #f5f5f1;
-  --ink: #17171b;
-  --ink-2: #4a4a53;
-  --ink-3: #6e6e78;
-  --rule: rgba(23, 23, 27, 0.18);
-  --pass: #1e7a4c;
-  --fail: #b42318;
-  --skip: #6e6e78;
-  --attention: #c2410c;
-  --marker: #ffe58a;
-  --serif: "Noto Serif JP Variable", serif;
-  --gothic: "Zen Kaku Gothic New", sans-serif;
-  --mono: "JetBrains Mono Variable", "Zen Kaku Gothic New", monospace;
+export const DEFAULT_THEME = {
+    size: { width: VIDEO_WIDTH, height: VIDEO_HEIGHT },
+    colors: { ...DEFAULT_COLORS },
+    fonts: { ...DEFAULT_FONT_FAMILIES },
+    motion: DEFAULT_MOTION,
+    minScale: 0.6,
+    base: "paper",
+    fontLoading: "bundled",
+};
+/** :root の色と書体のトークン */
+export function rootStyle(theme) {
+    const { colors, fonts } = theme;
+    const tokens = [
+        ["paper", colors.paper],
+        ["ink", colors.ink],
+        ["ink-2", colors.ink2],
+        ["ink-3", colors.ink3],
+        ["rule", colors.rule],
+        ["pass", colors.pass],
+        ["fail", colors.fail],
+        ["skip", colors.skip],
+        ...(theme.partialToken ? [["partial", colors.partial]] : []),
+        ["attention", colors.attention],
+        ["marker", colors.marker],
+        ["serif", fonts.heading],
+        ["gothic", fonts.body],
+        ["mono", fonts.mono],
+    ];
+    return `\n:root {\n${tokens.map(([name, value]) => `  --${name}: ${value};\n`).join("")}}\n`;
 }
-* { box-sizing: border-box; margin: 0; padding: 0; }
-html, body { width: 1080px; height: 1920px; overflow: hidden; background: var(--paper); }
+/** 同梱の紙面のスタイル(:root のトークンを除く)。docs/design.md の方針で組んだもの */
+export function paperStyle(theme) {
+    const { size, motion: m } = theme;
+    return String.raw `* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: ${size.width}px; height: ${size.height}px; overflow: hidden; background: var(--paper); }
 body {
   font-family: var(--gothic);
   color: var(--ink);
@@ -292,7 +308,7 @@ body {
   font-kerning: normal;
 }
 .mono { font-family: var(--mono); }
-#stage { position: relative; width: 1080px; height: 1920px; overflow: hidden; background: var(--paper); }
+#stage { position: relative; width: ${size.width}px; height: ${size.height}px; overflow: hidden; background: var(--paper); }
 
 /* 題字(マストヘッド): 上辺の二重罫 */
 header.masthead { position: absolute; top: 72px; left: 80px; right: 80px; }
@@ -310,11 +326,11 @@ main { position: absolute; top: 230px; left: 80px; right: 80px; height: 1180px; 
 /* --u は文字や余白の単位。内容があふれるシーンでは小さくする */
 .content { --u: calc(var(--s, 1) * 1px); display: flex; flex-direction: column; gap: calc(40 * var(--u)); }
 
-.enter { animation: rise 0.38s cubic-bezier(0.2, 0, 0, 1) both; animation-delay: calc(var(--i, 0) * ${ENTER_STEP}s + ${ENTER_OFFSET}s); }
-@keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+.enter { animation: rise ${m.enter.seconds}s cubic-bezier(0.2, 0, 0, 1) both; animation-delay: calc(var(--i, 0) * ${m.enter.step}s + ${m.enter.offset}s); }
+@keyframes rise { from { opacity: 0; transform: translateY(${m.enter.distance}px); } to { opacity: 1; transform: none; } }
 .rule { height: 0; border-top: 2px solid var(--ink); }
 .rule.thin { border-top: 1px solid var(--rule); }
-.rule-in { transform-origin: left center; animation: draw 0.45s cubic-bezier(0.2, 0, 0, 1) both; animation-delay: calc(var(--i, 0) * 0.07s); }
+.rule-in { transform-origin: left center; animation: draw ${m.rule.seconds}s cubic-bezier(0.2, 0, 0, 1) both; animation-delay: calc(var(--i, 0) * ${m.enter.step}s); }
 @keyframes draw { from { transform: scaleX(0); } to { transform: scaleX(1); } }
 
 /* 表紙 */
@@ -433,8 +449,56 @@ footer.folio {
 .right { display: flex; gap: 22px; flex: none; }
 .page { font-variant-numeric: tabular-nums; color: var(--ink-2); font-weight: 700; }
 `;
+}
+/** base が none のときのスタイル。シーンの切り替え、縮小、登場の動き、字幕など、動作に要るものだけ */
+export function minimalStyle(theme) {
+    const { size, motion: m } = theme;
+    return String.raw `
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: ${size.width}px; height: ${size.height}px; overflow: hidden; background: var(--paper); }
+body { font-family: var(--gothic); color: var(--ink); -webkit-font-smoothing: antialiased; }
+#stage { position: relative; width: ${size.width}px; height: ${size.height}px; overflow: hidden; background: var(--paper); }
+main { position: absolute; inset: 0; }
+.scene { position: absolute; inset: 0; display: none; flex-direction: column; }
+.scene.active { display: flex; }
+.content { --u: calc(var(--s, 1) * 1px); }
+.enter { animation: rise ${m.enter.seconds}s cubic-bezier(0.2, 0, 0, 1) both; animation-delay: calc(var(--i, 0) * ${m.enter.step}s + ${m.enter.offset}s); }
+@keyframes rise { from { opacity: 0; transform: translateY(${m.enter.distance}px); } to { opacity: 1; transform: none; } }
+.rule-in { transform-origin: left center; animation: draw ${m.rule.seconds}s cubic-bezier(0.2, 0, 0, 1) both; animation-delay: calc(var(--i, 0) * ${m.enter.step}s); }
+@keyframes draw { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+.stroke { fill: none; stroke: var(--ink); stroke-width: 2; stroke-dasharray: 1; animation: stroke 0.22s cubic-bezier(0.2, 0, 0, 1) both; }
+@keyframes stroke { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+#caption { opacity: 0; }
+`;
+}
+/** 同梱の書体を、名前と太さを決め打ちして読み込む(作業報告と会話の要約) */
+const BUNDLED_FONT_LOADS = String.raw `    await Promise.all([
+      ...[500, 700, 800, 900].map((w) => document.fonts.load(w + ' 48px "Noto Serif JP Variable"', text)),
+      ...[400, 500, 700, 900].map((w) => document.fonts.load(w + ' 48px "Zen Kaku Gothic New"', text)),
+      document.fonts.load('400 28px "JetBrains Mono Variable"', text),
+    ]);`;
+/**
+ * ページの要素(::before・::after を含む)が使う書体と太さをすべて集め、画面に出る文字と字幕の文字で読み込む(自由形式)。
+ * 形式の CSS が書体や太さを変えても、撮る前に読み込み終える。
+ */
+const COMPUTED_FONT_LOADS = String.raw `    const fonts = new Set();
+    let extra = "";
+    for (const el of document.querySelectorAll("body *")) {
+      for (const pseudo of [null, "::before", "::after"]) {
+        const style = getComputedStyle(el, pseudo);
+        if (pseudo) {
+          if (!style.content || style.content === "none" || style.content === "normal") continue;
+          extra += style.content.replace(/^["']|["']$/g, "");
+        }
+        fonts.add(style.fontStyle + " " + style.fontWeight + " 48px " + style.fontFamily);
+      }
+    }
+    await Promise.all([...fonts].map((font) => document.fonts.load(font, text + extra)));`;
 /** ページ内で動くスクリプト。__seek(t) で時刻 t の状態を描き、同じ見た目かどうかの判定キーを返す。 */
-const PAGE_SCRIPT = String.raw `
+function pageScript(theme) {
+    const m = theme.motion;
+    const fontLoads = theme.fontLoading === "computed" ? COMPUTED_FONT_LOADS : BUNDLED_FONT_LOADS;
+    return String.raw `
 (() => {
   const data = JSON.parse(document.getElementById("timeline-data").textContent);
   const scenes = [...document.querySelectorAll(".scene")];
@@ -451,18 +515,14 @@ const PAGE_SCRIPT = String.raw `
 
   window.__prepare = async () => {
     const text = document.body.textContent + data.scenes.flatMap((s) => s.cues.map((c) => c.text)).join("");
-    await Promise.all([
-      ...[500, 700, 800, 900].map((w) => document.fonts.load(w + ' 48px "Noto Serif JP Variable"', text)),
-      ...[400, 500, 700, 900].map((w) => document.fonts.load(w + ' 48px "Zen Kaku Gothic New"', text)),
-      document.fonts.load('400 28px "JetBrains Mono Variable"', text),
-    ]);
+${fontLoads}
     await document.fonts.ready;
     const fitted = [];
     scenes.forEach((scene, i) => {
       activate(i);
       const content = scene.querySelector(".content");
       let scale = 1;
-      while (content.offsetHeight > main.clientHeight && scale > 0.6) {
+      while (content.offsetHeight > main.clientHeight && scale > ${theme.minScale}) {
         scale = Math.round((scale - 0.04) * 100) / 100;
         content.style.setProperty("--s", String(scale));
       }
@@ -473,7 +533,7 @@ const PAGE_SCRIPT = String.raw `
   };
 
   const clamp01 = (x) => Math.max(0, Math.min(1, x));
-  const CAPTION_LEAD = 0.1;
+  const CAPTION_LEAD = ${m.caption.lead};
 
   window.__seek = (t) => {
     let index = data.scenes.findIndex((s) => t < s.end);
@@ -481,7 +541,7 @@ const PAGE_SCRIPT = String.raw `
     if (index !== current) activate(index);
     const scene = data.scenes[index];
     const local = t - scene.start;
-    const fade = Math.round(clamp01(Math.min(local / 0.2, (scene.end - t) / 0.18)) * 100) / 100;
+    const fade = Math.round(clamp01(Math.min(local / ${m.scene.fadeIn}, (scene.end - t) / ${m.scene.fadeOut})) * 100) / 100;
     const el = scenes[index];
     el.style.opacity = String(fade);
 
@@ -503,16 +563,32 @@ const PAGE_SCRIPT = String.raw `
         caption.textContent = cue.text;
         caption.dataset.key = key;
       }
-      captionOpacity = Math.round(clamp01((t - cue.start + CAPTION_LEAD) / 0.12) * fade * 100) / 100;
+      captionOpacity = Math.round(clamp01((t - cue.start + CAPTION_LEAD) / ${m.caption.fade}) * fade * 100) / 100;
     }
     caption.style.opacity = String(captionOpacity);
     return [index, fade, progress.join(","), cueIndex, captionOpacity].join("|");
   };
 })();
 `;
+}
+function masthead(mastTitle, date) {
+    if (mastTitle === undefined && !date)
+        return "";
+    const title = mastTitle === undefined ? "" : `
+      <div class="mast-title">${escapeHtml(mastTitle)}</div>`;
+    return `
+  <header class="masthead">
+    <div class="mast-row">${title}
+      <div class="mast-meta">${escapeHtml(date)}</div>
+    </div>
+    <div class="double-rule"></div>
+  </header>`;
+}
 /** 動画 1 本分のページの枠(題字・本文・字幕・柱)を組む。フォントは /fonts/ 以下から読み込む前提。 */
 export function pageHtml(input) {
     const { mastTitle, date, bodies, scenes, where, labels, extraStyle } = input;
+    const theme = input.theme ?? DEFAULT_THEME;
+    const style = rootStyle(theme) + (theme.base === "paper" ? paperStyle(theme) : minimalStyle(theme));
     const sections = scenes
         .map((scene, i) => `<section class="scene" data-kind="${scene.kind}"><div class="content">${bodies[i] ?? ""}</div></section>`)
         .join("\n");
@@ -527,17 +603,10 @@ export function pageHtml(input) {
 <link rel="stylesheet" href="/fonts/gothic/700.css">
 <link rel="stylesheet" href="/fonts/gothic/900.css">
 <link rel="stylesheet" href="/fonts/mono/index.css">
-<style>${STYLE}${extraStyle ?? ""}</style>
+<style>${style}${extraStyle ?? ""}</style>${theme.head ?? ""}
 </head>
 <body>
-<div id="stage">
-  <header class="masthead">
-    <div class="mast-row">
-      <div class="mast-title">${escapeHtml(mastTitle)}</div>
-      <div class="mast-meta">${escapeHtml(date)}</div>
-    </div>
-    <div class="double-rule"></div>
-  </header>
+<div id="stage">${masthead(mastTitle, date)}
   <main>
 ${sections}
   </main>
@@ -548,7 +617,7 @@ ${sections}
   </footer>
 </div>
 <script id="timeline-data" type="application/json">${data}</script>
-<script>${PAGE_SCRIPT}</script>
+<script>${pageScript(theme)}</script>
 </body>
 </html>`;
 }

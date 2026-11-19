@@ -2,16 +2,20 @@ import type { ConversationSceneType } from "../conversation/schema.js";
 import type { VideoScript } from "../script/schema.js";
 import type { Synthesizer } from "../tts/types.js";
 import { durationOf, mixInto, type Pcm, silence } from "../tts/wav.js";
+import { DEFAULT_MOTION, type Motion } from "./motion.js";
 
 /** シーンの並び。figure(図解)は台本に figure があるときだけ入る */
 export const SCENE_KINDS = ["opening", "work", "figure", "verification", "decisions", "closing"] as const;
 export type SceneKind = (typeof SCENE_KINDS)[number];
 /** 会話の要約のシーン。冒頭と締めの間に、台本に書かれた種類のシーンが並ぶ(同じ種類が続くこともある) */
 export type ConversationSceneKind = "opening" | ConversationSceneType | "closing";
+/** 自由形式のシーン。冒頭と締めの間に、台本に書かれた種類のシーンが並ぶ */
+export type FreeSceneKind = "opening" | "text" | "list" | "point" | "groups" | "quote" | "figure" | "numbers" | "image" | "closing";
+type AnySceneKind = SceneKind | ConversationSceneKind | FreeSceneKind;
 
 /** シーン 1 つ分の読み上げ文(字幕 1 枚ごとに分けたもの) */
 export interface SceneLines {
-  kind: SceneKind | ConversationSceneKind;
+  kind: AnySceneKind;
   lines: string[];
 }
 
@@ -23,7 +27,7 @@ export interface Cue {
 }
 
 export interface TimedScene {
-  kind: SceneKind | ConversationSceneKind;
+  kind: AnySceneKind;
   start: number;
   end: number;
   cues: Cue[];
@@ -44,16 +48,12 @@ export interface TimelineOptions {
   speed: number;
   maxSpeed: number;
   onProgress?: (done: number, total: number) => void;
+  /**
+   * 読み上げの前後の間(motion.ts)。leadIn はシーン開始から最初の読み上げまで(要素の登場を見せる時間)。
+   * 省略すると既定の値(作業報告と会話の要約)
+   */
+  pause?: Motion["pause"];
 }
-
-/** シーン開始から最初の読み上げまで。要素の登場アニメーションを見せる時間。 */
-const LEAD_IN = 0.5;
-/** 文と文の間。0.25 秒では間延びしたため詰めている */
-const LINE_GAP = 0.15;
-const TAIL = 0.6;
-/** 最後のシーンはクレジットを読めるよう長めに残す */
-const CLOSING_TAIL = 2.0;
-const MIN_SCENE = 2.4;
 /** 字幕 2 行(46px・幅 888px)に収まる目安(全角) */
 const CAPTION_MAX = 38;
 
@@ -93,7 +93,8 @@ export function sceneLines(script: VideoScript): SceneLines[] {
 
 const round = (seconds: number) => Math.round(seconds * 1000) / 1000;
 
-function layout(scenes: SceneLines[], clips: Pcm[][]): { scenes: TimedScene[]; duration: number } {
+function layout(scenes: SceneLines[], clips: Pcm[][], pause: Motion["pause"]): { scenes: TimedScene[]; duration: number } {
+  const { leadIn: LEAD_IN, lineGap: LINE_GAP, tail: TAIL, closingTail: CLOSING_TAIL, minScene: MIN_SCENE } = pause;
   let cursor = 0;
   const timed = scenes.map((scene, i) => {
     const start = cursor;
@@ -141,7 +142,8 @@ export async function buildSceneTimeline(scenes: SceneLines[], synth: Synthesize
 
   let speed = options.speed;
   let clips = await synthesizeAll(speed);
-  let timed = layout(scenes, clips);
+  const pause = options.pause ?? DEFAULT_MOTION.pause;
+  let timed = layout(scenes, clips, pause);
 
   if (timed.duration > options.maxSeconds && speed < options.maxSpeed) {
     // 読み上げ時間は話速にほぼ反比例するので、超過分を吸収できる話速を求める
@@ -150,7 +152,7 @@ export async function buildSceneTimeline(scenes: SceneLines[], synth: Synthesize
     const needed = speech > excess ? (speed * speech) / (speech - excess) : options.maxSpeed;
     speed = Math.min(options.maxSpeed, Math.ceil(needed * 100) / 100);
     clips = await synthesizeAll(speed);
-    timed = layout(scenes, clips);
+    timed = layout(scenes, clips, pause);
   }
 
   const first = clips.flat()[0];
