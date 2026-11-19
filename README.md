@@ -450,7 +450,7 @@ dopagakix render "$(npm root -g)/dopagakix/examples/free.example.json" --no-voic
 | 見出しと説明(`text`) | `heading`、`lines` | 罫線の下に大きな見出しと説明。欄見出しは出さない |
 | 行の並び(`list`) | `label`、`items`、`mark`(`number`=番号、`dash`=「―」、`arrow`=「→」。省略すると `dash`) | 欄見出しと、印の付いた行 |
 | 強調する 1 文(`point`) | `label`、`point`、`items`(任意) | 欄見出しと、蛍光ペンの下線を引いた 1 文、補足の行 |
-| 2 つに分けた行(`groups`) | `label`、`groups`(各組に小見出し `label`、印 `mark`、行 `items`) | 欄見出しと、小見出しごとの行。印は ○(`circle`)、△(`triangle`)、×(`cross`)、−(`bar`)で、色は順に成功、一部完了、失敗、未実施の色 |
+| 2 つに分けた行(`groups`) | `label`、`groups`(各組に小見出し `label`、印 `mark`、行 `items`。既定は 2 組、各 2 件) | 欄見出しと、小見出しごとの行。印は ○(`circle`)、△(`triangle`)、×(`cross`)、−(`bar`)で、色は順に成功、一部完了、失敗、未実施の色 |
 | 引用(`quote`) | `label`、`text`、`by`(任意) | 欄見出しと、鉤括弧で囲んだ文、名前 |
 | 図解(`figure`) | `figure`(作業報告の `figure` と同じ `before_after` か `flow`。読み上げ文は `narration` に書く) | 前後の比較か、流れ図。流れ図の `changed` は「強調する段」の意味 |
 | 数値(`numbers`) | `label`、`figures`(数値の名前) | 欄見出しと、`facts` の数値 |

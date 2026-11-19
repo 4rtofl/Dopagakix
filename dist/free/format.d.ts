@@ -56,13 +56,16 @@ export declare const DEFAULT_FREE_LIMITS: {
         readonly min: 1;
         readonly max: 8;
     };
-    /** シーンの種類ごとの件数。text=説明の行、list=行の並び、point=強調する 1 文の補足、groups=組の数、groupItems=1 組の行 */
+    /**
+     * シーンの種類ごとの件数。text=説明の行、list=行の並び、point=強調する 1 文の補足、groups=組の数、groupItems=1 組の行。
+     * groupItems は Issue #25 の案(3 件)から 2 件にした。2 行に折り返す項目(全角 28 文字)を 3 件ずつ並べると、本文の枠に収まらないため
+     */
     readonly items: {
         readonly text: 2;
         readonly list: 5;
         readonly point: 3;
         readonly groups: 2;
-        readonly groupItems: 3;
+        readonly groupItems: 2;
     };
     /** 図解(作業報告の FIGURE_LIMITS と同じ) */
     readonly figure: {

@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { loadFree, mediaFiles, probeImages } from "../src/free/files.js";
+import { DEFAULT_FREE_LIMITS } from "../src/free/format.js";
 import { freeSceneLines } from "../src/script/readings.js";
 import { SilentSynthesizer } from "../src/tts/silent.js";
 import { buildFreeHtml } from "../src/video/free.js";
@@ -157,6 +158,79 @@ describe.runIf(hasChromium)("ページを開く(Chromium)", () => {
       await opened.page.waitForTimeout(300);
       expect(await opacityAt(5)).toBeCloseTo(0.5, 2);
       expect(await opacityAt(2.5)).toBeCloseTo(0.25, 2);
+    } finally {
+      await opened.close();
+    }
+  });
+
+  it("既定の上限いっぱいに書いても、どのシーンも縮めずに本文の枠に収まり、数値が横にはみ出さない", async () => {
+    const L = DEFAULT_FREE_LIMITS;
+    // 全角の文字を、上限の文字数だけ並べる(折り返しが多くなるよう、文節のある文にする)
+    const text = (n: number) => "漢字仮名交じりの文章を書いてみると長さがよく分かるはずですそれでも続けます".repeat(3).slice(0, n);
+    const lines = (count: number, n: number = L.item) => Array.from({ length: count }, () => text(n));
+    const figure = (value: number | string) => ({ label: text(L.figures.label), value, unit: text(L.figures.unit) });
+    const names = ["a", "b", "c"].slice(0, L.figures.count);
+    const file = {
+      kind: "free",
+      version: 1,
+      facts: {
+        where: text(L.where),
+        date: "2026-11-18",
+        figures: { a: figure(12_345_678), b: figure(text(L.figures.value).replace(/./g, "8")), c: figure(99_999_999) },
+        source: text(L.source),
+      },
+      script: {
+        title: text(L.title),
+        headline: text(L.headline),
+        opening: { label: text(L.headlineLabel), figures: names, note: text(L.note), narration: ["冒頭です。"] },
+        scenes: [
+          { type: "text", heading: text(L.heading), lines: lines(L.items.text), narration: ["一です。"] },
+          { type: "list", label: text(L.label), mark: "number", items: lines(L.items.list), narration: ["二です。"] },
+          { type: "point", label: text(L.label), point: text(L.point), items: lines(L.items.point), narration: ["三です。"] },
+          {
+            type: "groups",
+            label: text(L.label),
+            groups: Array.from({ length: L.items.groups }, (_, i) => ({ label: text(L.label), mark: i ? "triangle" : "circle", items: lines(L.items.groupItems) })),
+            narration: ["四です。"],
+          },
+          { type: "quote", label: text(L.label), text: text(L.quote), by: text(L.by), narration: ["五です。"] },
+          {
+            type: "figure",
+            figure: { type: "flow", title: text(L.figure.title), steps: Array.from({ length: L.figure.maxSteps }, () => ({ label: text(L.figure.stepLabel), note: text(L.figure.stepNote) })) },
+            narration: ["六です。"],
+          },
+          {
+            type: "figure",
+            figure: { type: "before_after", title: text(L.figure.title), before: lines(L.figure.sideLines, L.figure.sideText), after: lines(L.figure.sideLines, L.figure.sideText) },
+            narration: ["七です。", "後です。"],
+          },
+          { type: "numbers", label: text(L.label), figures: names, narration: ["八です。"] },
+        ],
+        closing: { notes: lines(L.closingNotes.count, L.closingNotes.chars), narration: ["以上です。"] },
+      },
+    };
+    const target = path.join(dir, "max.json");
+    await writeFile(target, JSON.stringify(file));
+    const opened = await openFree(target);
+    try {
+      expect(opened.fitScales).toEqual(opened.fitScales.map(() => 1));
+      const wide = (await opened.page.evaluate(`(() => {
+        const scenes = [...document.querySelectorAll(".scene")];
+        const found = [];
+        scenes.forEach((scene, i) => {
+          scenes.forEach((el, j) => el.classList.toggle("active", i === j));
+          for (const num of scene.querySelectorAll(".figure .num")) {
+            const box = num.closest(".figure").getBoundingClientRect();
+            const range = document.createRange();
+            range.selectNodeContents(num);
+            const text = range.getBoundingClientRect();
+            if (text.right > box.right + 1 || text.left < box.left - 1) found.push(i + ":" + num.textContent);
+          }
+        });
+        scenes.forEach((el, j) => el.classList.toggle("active", j === 0));
+        return found;
+      })()`)) as string[];
+      expect(wide).toEqual([]);
     } finally {
       await opened.close();
     }

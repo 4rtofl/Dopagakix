@@ -55,8 +55,11 @@ export const DEFAULT_FREE_LIMITS = {
   source: 40,
   /** 冒頭と締めの間に並べるシーンの数 */
   scenes: { min: 1, max: 8 },
-  /** シーンの種類ごとの件数。text=説明の行、list=行の並び、point=強調する 1 文の補足、groups=組の数、groupItems=1 組の行 */
-  items: { text: 2, list: 5, point: 3, groups: 2, groupItems: 3 },
+  /**
+   * シーンの種類ごとの件数。text=説明の行、list=行の並び、point=強調する 1 文の補足、groups=組の数、groupItems=1 組の行。
+   * groupItems は Issue #25 の案(3 件)から 2 件にした。2 行に折り返す項目(全角 28 文字)を 3 件ずつ並べると、本文の枠に収まらないため
+   */
+  items: { text: 2, list: 5, point: 3, groups: 2, groupItems: 2 },
   /** 図解(作業報告の FIGURE_LIMITS と同じ) */
   figure: { title: 20, sideLines: 3, sideText: 16, minSteps: 2, maxSteps: 5, stepLabel: 12, stepNote: 16, narration: 2 },
   /** 読み上げ。1 シーンの文の数と、1 文の文字数の目安(これより 10 文字多いと警告する) */

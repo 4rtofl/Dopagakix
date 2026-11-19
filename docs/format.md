@@ -154,7 +154,7 @@ AI が書いた台本であることを画面に出すかは、`page.labels` で
 | シーンの種類 | `.scene` の `data-kind`。`opening`、`text`、`list`、`point`、`groups`、`quote`、`figure`、`numbers`、`image`、`closing` |
 | 欄見出し | `.section`、`.rule`(細い罫は `.rule.thin`)、`h2.section-title` |
 | 表紙 | `h1.title`(長さで `.mid`、`.long`)、`.facts`、`.fact-row`、`.fact-label`、`.fact-body`、`.lede.gist`(要旨)、`.when.note`(`opening.note`) |
-| 数値 | `.figures`(表紙は `.figures.even`、数値のシーンは `.figures.stack`)、`.figure`、`.fact-label`(見出し)、`.num`(長い文字列は `.num.long`)、`.num small`(単位) |
+| 数値 | `.figures`(表紙は `.figures.even`、数値のシーンは `.figures.stack`)、`.figure`、`.fact-label`(見出し)、`.num`、`.num small`(単位)。値が長くて単位が横に収まらないときは `.num.unit-below`(単位を値の下に置く) |
 | 見出しと説明 | `h2.text-heading`、`.text-lines`、`.text-line` |
 | 行 | `.rows`、`.row`、`.row-text`。行の並びは `.rows.list`(`data-mark` に `number`、`dash`、`arrow`)、強調する 1 文の補足は `.rows.point-items` |
 | 印 | `.num-mark`(番号)、`.dash`(―)、`.arrow`(→)、`.check-mark`(○ △ × −) |
@@ -168,7 +168,7 @@ AI が書いた台本であることを画面に出すかは、`page.labels` で
 | 柱 | `footer.folio`、`.where`、`.right`、`.page`(ページ番号) |
 | 登場の動き | `.enter`(下から現れる。`--i` が登場順)、`.rule-in`(左から引く)。`@keyframes rise`、`draw`、`stroke` |
 
-CSS 変数: 色と書体のトークン(上の表)、`--u`(文字や余白の単位。縮めたシーンでは小さくなる)、`--i`(登場順)、`--n`(表紙の数値の数)。
+CSS 変数: 色と書体のトークン(上の表)、`--u`(文字や余白の単位。縮めたシーンでは小さくなる)、`--i`(登場順)、`--n`(表紙の数値の数)、`--fit`(`.num` に付ける、数字の大きさの px。値と単位の長さから、既定の紙面の幅に収まるよう決めたもの)。
 
 例:
 
@@ -207,9 +207,9 @@ CSS 変数: 色と書体のトークン(上の表)、`--u`(文字や余白の単
 | `figures` | 表紙と数値のシーンに並べる数値の数(`count`)、見出し(`label`)、値の文字列(`value`)、単位(`unit`)の文字数 | 3 つ、6、8、4 |
 | `source` | 数値の出どころ | 40 |
 | `scenes` | 冒頭と締めの間のシーンの数(`min`、`max`) | 1〜8 |
-| `items` | シーンの種類ごとの件数。説明の行(`text`)、行の並び(`list`)、強調する 1 文の補足(`point`)、組の数(`groups`)、1 組の行(`groupItems`) | 2、5、3、2、3 |
+| `items` | シーンの種類ごとの件数。説明の行(`text`)、行の並び(`list`)、強調する 1 文の補足(`point`)、組の数(`groups`)、1 組の行(`groupItems`) | 2、5、3、2、2 |
 | `figure` | 図解の見出し(`title`)、前後の行数(`sideLines`)と文字数(`sideText`)、段の数(`minSteps`、`maxSteps`)、段の名前(`stepLabel`)と補足(`stepNote`)、読み上げ文の数(`narration`) | 20、3、16、2〜5、12、16、2 |
 | `narration` | 1 シーンの読み上げ文の数(`sentences`)と、1 文の文字数の目安(`chars`。これより 10 文字多いと警告) | 3、35 |
 | `minScale` | あふれたシーンを縮める最小の倍率(0 より大きく 1 以下) | 0.6 |
 
-既定の上限は、縮小なしで本文の枠に収まる量です(同梱の例 `examples/free.example.json` で確かめています)。上限を上げると、文字が縮小されるか、最小まで縮めても収まらないシーンが出ることがあります。`render` が知らせるので、文字を減らすか、形式の CSS で文字を小さくしてください。
+既定の上限は、すべての欄を上限いっぱいに書いても、縮小なしで本文の枠に収まる量です。2 つに分けた行は、2 行に折り返す項目を 3 件ずつ並べると収まらないため、1 組 2 件にしています(1 行に収まる短い項目なら、3 件ずつでも収まります)。上限を上げると、文字が縮小されるか、最小まで縮めても収まらないシーンが出ることがあります。`render` が知らせるので、文字を減らすか、形式の CSS で文字を小さくしてください。

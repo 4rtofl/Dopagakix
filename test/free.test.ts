@@ -341,8 +341,8 @@ describe("自由形式のページ", () => {
     for (const kind of ["text", "list", "point", "groups", "quote", "figure", "numbers", "image"]) {
       expect(html).toContain(`<section class="scene" data-kind="${kind}">`);
     }
-    expect(html).toContain("6,399<small>行</small>");
-    expect(html).toContain('<div class="num long">v0.1.0</div>');
+    expect(html).toContain('<div class="num" style="--fit:76">6,399<small>行</small></div>');
+    expect(html).toContain('<div class="num" style="--fit:104">v0.1.0</div>');
     expect(html).toContain('<ol class="rows list" data-mark="number">');
     expect(html).toContain('<div class="group circle" data-mark="circle">');
     expect(html).toContain('<div class="group bar" data-mark="bar">');

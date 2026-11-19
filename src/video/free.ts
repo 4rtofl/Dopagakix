@@ -63,24 +63,60 @@ function figureValue(figure: FreeFigure): string {
   return typeof figure.value === "number" ? number(figure.value) : figure.value;
 }
 
-/** 数値 1 つ。値の文字列が長いものは小さめにする */
-function figureHtml(figure: FreeFigure): string {
+/** 数値の文字の幅の目安(em)。数字と英字は約 0.6em、区切りの記号は狭く、全角は 1em */
+function valueEm(text: string): number {
+  return [...text].reduce((n, c) => n + (/[,.:]/.test(c) ? 0.3 : /[\x20-\x7e]/.test(c) ? 0.6 : 1), 0);
+}
+
+/** 数値の大きさの決め方。width=数値 1 つに使える幅、max=数字の最大の大きさ、unit=単位の文字の大きさ(px) */
+interface FigureFit {
+  width: number;
+  max: number;
+  unit: number;
+}
+
+/** 表紙(横に並べる)と数値のシーン(縦に並べる)の、数値の大きさの決め方。既定の大きさの紙面のときの値 */
+function figureFits(size: { width: number }, columns: number): { row: FigureFit; stack: FigureFit } {
+  const frame = size.width - 160;
+  return {
+    row: { width: Math.floor(frame / Math.max(1, columns)) - 44, max: 76, unit: 30 },
+    stack: { width: frame - 264, max: 104, unit: 30 },
+  };
+}
+
+/**
+ * 数値 1 つ。数字が枠の幅からはみ出さないよう、値と単位の長さから数字の大きさ(--fit)を決める
+ * (あふれたシーンの縮小は高さしか見ないため)。それでも収まらない長さなら、単位を値の下に置く(.unit-below)。
+ */
+function figureHtml(figure: FreeFigure, fit: FigureFit): string {
   const value = figureValue(figure);
-  const long = [...value].length > 5 ? " long" : "";
+  const unitWidth = figure.unit ? [...figure.unit].reduce((n, c) => n + (/[\x20-\x7e]/.test(c) ? 0.55 : 1), 0) * fit.unit + 6 : 0;
+  const em = Math.max(valueEm(value), 1);
+  let size = Math.floor((fit.width - unitWidth) / em);
+  let below = false;
+  if (size < Math.round(fit.max * 0.55) && figure.unit) {
+    below = true;
+    size = Math.floor(fit.width / em);
+  }
+  size = Math.max(24, Math.min(fit.max, size));
   const unit = figure.unit ? `<small>${escapeHtml(figure.unit)}</small>` : "";
-  return `<div class="figure"><div class="fact-label">${escapeHtml(figure.label)}</div><div class="num${long}">${escapeHtml(value)}${unit}</div></div>`;
+  return (
+    `<div class="figure"><div class="fact-label">${escapeHtml(figure.label)}</div>` +
+    `<div class="num${below ? " unit-below" : ""}" style="--fit:${size}">${escapeHtml(value)}${unit}</div></div>`
+  );
 }
 
 function figuresOf(names: string[] | undefined, facts: FreeFacts): FreeFigure[] {
   return (names ?? []).flatMap((name) => (facts.figures?.[name] ? [facts.figures[name]] : []));
 }
 
-function openingScene(script: FreeScript, facts: FreeFacts): string {
+function openingScene(script: FreeScript, facts: FreeFacts, format: ResolvedFormat): string {
   const figures = figuresOf(script.opening.figures, facts);
+  const fit = figureFits(format.size, figures.length).row;
   const row = figures.length
     ? `
       <div class="rule thin rule-in" style="--i:3"></div>
-      <div class="enter figures even" style="--i:4; --n:${figures.length}">${figures.map(figureHtml).join("")}</div>`
+      <div class="enter figures even" style="--i:4; --n:${figures.length}">${figures.map((figure) => figureHtml(figure, fit)).join("")}</div>`
     : "";
   return `
     <h1 ${enter(titleClass(script.title), 0)}>${escapeHtml(script.title)}</h1>
@@ -149,7 +185,9 @@ function sceneBody(scene: FreeScene, timed: TimedScene | undefined, input: FreeT
     }
     case "numbers":
       return `${sectionHead(scene.label)}
-    <div ${enter("figures stack", 1)}>${figuresOf(scene.figures, facts).map(figureHtml).join("")}</div>`;
+    <div ${enter("figures stack", 1)}>${figuresOf(scene.figures, facts)
+      .map((figure) => figureHtml(figure, figureFits(format.size, 1).stack))
+      .join("")}</div>`;
     case "image": {
       const image = images?.[scene.src];
       if (!image) return sectionHead(scene.label);
@@ -185,7 +223,9 @@ export const FREE_STYLE = String.raw`
 /* 自由形式 */
 .lede.gist { margin-top: 0; color: var(--ink); font-weight: 700; }
 .figures.even { grid-template-columns: repeat(var(--n, 3), minmax(0, 1fr)); }
-.figure .num.long { font-size: calc(52 * var(--u)); }
+/* 数字の大きさは、値と単位の長さから枠に収まるよう決める(--fit)。収まらない長さなら単位を値の下に置く */
+.figure .num { font-size: calc(var(--fit, 76) * var(--u)); }
+.figure .num.unit-below small { display: block; margin-left: 0; }
 .text-heading {
   font-family: var(--serif); font-weight: 900; font-size: calc(72 * var(--u)); line-height: 1.3;
   font-feature-settings: "palt"; text-wrap: balance;
@@ -221,8 +261,7 @@ export const FREE_STYLE = String.raw`
   padding: calc(26 * var(--u)) 0; border-left: none; border-bottom: 1px solid var(--rule);
 }
 .figures.stack .fact-label { font-size: calc(36 * var(--u)); color: var(--ink-2); }
-.figures.stack .num { font-size: calc(104 * var(--u)); }
-.figures.stack .num.long { font-size: calc(76 * var(--u)); }
+.figures.stack .num { font-size: calc(var(--fit, 104) * var(--u)); text-align: right; }
 /* 画像: 切り抜かずに枠に収め、墨の細い罫線で囲む。角丸・影・背景の塗りは使わない */
 .image { display: flex; flex-direction: column; align-items: center; gap: calc(20 * var(--u)); }
 .image-img { display: block; max-width: 100%; border: 1.5px solid var(--ink); }
@@ -303,7 +342,7 @@ export function buildFreeHtml(input: FreeTemplateInput): string {
   // 冒頭と締めの間のシーンは、台本の scenes と同じ順に並ぶ
   let body = 0;
   const bodies = scenes.map((timed) => {
-    if (timed.kind === "opening") return openingScene(script, facts);
+    if (timed.kind === "opening") return openingScene(script, facts, format);
     if (timed.kind === "closing") return closingScene(input);
     const content = script.scenes[body++];
     return content ? sceneBody(content, timed, input) : "";
