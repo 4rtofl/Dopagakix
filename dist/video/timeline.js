@@ -1,14 +1,7 @@
 import { durationOf, mixInto, silence } from "../tts/wav.js";
+import { DEFAULT_MOTION } from "./motion.js";
 /** シーンの並び。figure(図解)は台本に figure があるときだけ入る */
 export const SCENE_KINDS = ["opening", "work", "figure", "verification", "decisions", "closing"];
-/** シーン開始から最初の読み上げまで。要素の登場アニメーションを見せる時間。 */
-const LEAD_IN = 0.5;
-/** 文と文の間。0.25 秒では間延びしたため詰めている */
-const LINE_GAP = 0.15;
-const TAIL = 0.6;
-/** 最後のシーンはクレジットを読めるよう長めに残す */
-const CLOSING_TAIL = 2.0;
-const MIN_SCENE = 2.4;
 /** 字幕 2 行(46px・幅 888px)に収まる目安(全角) */
 const CAPTION_MAX = 38;
 /** 字幕が 2 行に収まるよう、長い文を文末・読点のうち中央に近い位置で分ける。 */
@@ -50,7 +43,8 @@ export function sceneLines(script) {
     });
 }
 const round = (seconds) => Math.round(seconds * 1000) / 1000;
-function layout(scenes, clips) {
+function layout(scenes, clips, pause) {
+    const { leadIn: LEAD_IN, lineGap: LINE_GAP, tail: TAIL, closingTail: CLOSING_TAIL, minScene: MIN_SCENE } = pause;
     let cursor = 0;
     const timed = scenes.map((scene, i) => {
         const start = cursor;
@@ -94,7 +88,8 @@ export async function buildSceneTimeline(scenes, synth, options) {
     };
     let speed = options.speed;
     let clips = await synthesizeAll(speed);
-    let timed = layout(scenes, clips);
+    const pause = options.pause ?? DEFAULT_MOTION.pause;
+    let timed = layout(scenes, clips, pause);
     if (timed.duration > options.maxSeconds && speed < options.maxSpeed) {
         // 読み上げ時間は話速にほぼ反比例するので、超過分を吸収できる話速を求める
         const speech = clips.flat().reduce((sum, clip) => sum + durationOf(clip), 0);
@@ -102,7 +97,7 @@ export async function buildSceneTimeline(scenes, synth, options) {
         const needed = speech > excess ? (speed * speech) / (speech - excess) : options.maxSpeed;
         speed = Math.min(options.maxSpeed, Math.ceil(needed * 100) / 100);
         clips = await synthesizeAll(speed);
-        timed = layout(scenes, clips);
+        timed = layout(scenes, clips, pause);
     }
     const first = clips.flat()[0];
     const audio = silence(timed.duration, first?.sampleRate ?? 24_000, first?.channels ?? 1);

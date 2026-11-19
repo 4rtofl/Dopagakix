@@ -3,6 +3,7 @@ import { readdir } from "node:fs/promises";
 import path from "node:path";
 import type { VideoScript } from "../script/schema.js";
 import { resolveUserPath } from "../util/path.js";
+import { DEFAULT_MOTION, enterDelay, type Motion } from "../video/motion.js";
 import { endMarkDelay, RESULT_ROW_DELAY } from "../video/template.js";
 import type { TimedScene } from "../video/timeline.js";
 import { parseDuration, parseVolume } from "./bgm.js";
@@ -179,6 +180,23 @@ export function sfxCues(scenes: TimedScene[], script: VideoScript): SfxCue[] {
   });
   return cues.filter((cue) => cue.until > cue.at);
 }
+
+/**
+ * 自由形式の効果音を鳴らす時刻。ページの切り替え(2 シーン目以降の開始)と、最終ページの「以上」で鳴らす。
+ * 「以上」は最終ページの最初の要素(登場順 1)なので、形式の定義の motion から時刻を決める。
+ */
+export function freeSfxCues(scenes: TimedScene[], motion: Motion = DEFAULT_MOTION): SfxCue[] {
+  const speechStart = (scene: TimedScene) => scene.cues[0]?.start ?? scene.end;
+  const cues: SfxCue[] = [];
+  scenes.forEach((scene, i) => {
+    if (i > 0) cues.push({ kind: "page", at: scene.start, until: speechStart(scene) });
+    if (scene.kind === "closing") cues.push({ kind: "end", at: round(scene.start + enterDelay(FREE_END_MARK, motion)), until: speechStart(scene) });
+  });
+  return cues.filter((cue) => cue.until > cue.at);
+}
+
+/** 自由形式の最終ページで「以上」の登場順(video/free.ts と合わせる) */
+export const FREE_END_MARK = 1;
 
 const num = (n: number) => String(Math.round(n * 1000) / 1000);
 

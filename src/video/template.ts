@@ -1,10 +1,11 @@
 import type { FileChange, SessionFacts } from "../facts.js";
 import { type Author, type CheckResult, type Figure, STATUS_LABELS, type ScriptStatus, type VideoScript } from "../script/schema.js";
 import { formatDateTime } from "../util/time.js";
+import { DEFAULT_MOTION, enterDelay as motionDelay, type Motion } from "./motion.js";
+import { type ColorToken, DEFAULT_COLORS, DEFAULT_FONT_FAMILIES, type FontRole, VIDEO_HEIGHT, VIDEO_WIDTH } from "./tokens.js";
 import { type SceneKind, splitCaption, type TimedScene } from "./timeline.js";
 
-export const VIDEO_WIDTH = 1080;
-export const VIDEO_HEIGHT = 1920;
+export { VIDEO_HEIGHT, VIDEO_WIDTH } from "./tokens.js";
 
 export interface TemplateInput {
   script: VideoScript;
@@ -85,10 +86,8 @@ export function titleClass(title: string): string {
   return length <= 8 ? "title" : length <= 20 ? "title mid" : "title long";
 }
 
-/** 要素の登場の遅延(秒)。登場順 i の要素は i * ENTER_STEP + ENTER_OFFSET 秒後に現れ始める */
-const ENTER_STEP = 0.07;
-const ENTER_OFFSET = 0.06;
-const enterDelay = (i: number) => Math.round((i * ENTER_STEP + ENTER_OFFSET) * 1000) / 1000;
+/** 要素の登場の遅延(秒)。登場順 i の要素は i * enter.step + enter.offset 秒後に現れ始める(motion.ts) */
+const enterDelay = (i: number) => motionDelay(i, DEFAULT_MOTION);
 /** 表紙の「結果」の行の登場順 */
 const RESULT_ROW = 2;
 /** 表紙で「結果」の行が現れる時刻(シーン開始からの秒数。効果音を鳴らす時刻) */
@@ -208,8 +207,6 @@ export interface FigureTiming {
 const FIGURE_FIRST = 0.2;
 /** 矢印を引き終えてから次の要素を出す */
 const ARROW_LEAD = 0.3;
-/** 字幕は読み上げより少し前に出る(PAGE_SCRIPT の CAPTION_LEAD)。図も字幕に合わせる */
-const FIGURE_CUE_LEAD = 0.1;
 const FLOW_GAP = { min: 0.25, max: 1.2 } as const;
 
 const ms = (seconds: number) => Math.round(seconds * 1000) / 1000;
@@ -220,7 +217,9 @@ const ms = (seconds: number) => Math.round(seconds * 1000) / 1000;
  * - before_after: 変更前を最初に、変更後を 2 文目の読み上げ開始に合わせて出す(1 文だけなら、その文の中ほど)。
  * - flow: 段を上から順に出し、最後の段が読み上げの中ほどで出そろうよう間隔をとる。
  */
-export function figureTiming(figure: Figure, scene: TimedScene): FigureTiming {
+export function figureTiming(figure: Figure, scene: TimedScene, motion: Motion = DEFAULT_MOTION): FigureTiming {
+  // 字幕は読み上げより少し前に出る(motion.caption.lead)。図も字幕に合わせる
+  const FIGURE_CUE_LEAD = motion.caption.lead;
   const cues = scene.cues.map((cue) => ({ start: cue.start - scene.start, end: cue.end - scene.start }));
   if (figure.type === "before_after") {
     // 字幕は長い文を分けて表示するので、1 文目が何枚の字幕になったかを数えて 2 文目の先頭を探す
@@ -254,8 +253,8 @@ function arrow(cls: string, at: number): string {
 /** 指定した時刻(シーンの開始からの秒)に、下からフェードインさせる */
 const enterAt = (cls: string, at: number) => `class="enter ${cls}" style="animation-delay:${ms(at)}s"`;
 
-function figureScene(figure: Figure, scene: TimedScene | undefined): string {
-  const timing = figureTiming(figure, scene ?? { kind: "figure", start: 0, end: 0, cues: [] });
+export function figureScene(figure: Figure, scene: TimedScene | undefined, motion: Motion = DEFAULT_MOTION): string {
+  const timing = figureTiming(figure, scene ?? { kind: "figure", start: 0, end: 0, cues: [] }, motion);
   if (figure.type === "before_after") {
     const side = (cls: "before" | "after", label: string, lines: string[], at: number) =>
       `<div ${enterAt(`ba-side ${cls}`, at)}><div class="ba-label">${label}</div>` +
@@ -339,24 +338,66 @@ function closingScene(
     <div ${enter("credits", items.length + 2)}>${credits}</div>`;
 }
 
-const STYLE = String.raw`
-:root {
-  --paper: #f5f5f1;
-  --ink: #17171b;
-  --ink-2: #4a4a53;
-  --ink-3: #6e6e78;
-  --rule: rgba(23, 23, 27, 0.18);
-  --pass: #1e7a4c;
-  --fail: #b42318;
-  --skip: #6e6e78;
-  --attention: #c2410c;
-  --marker: #ffe58a;
-  --serif: "Noto Serif JP Variable", serif;
-  --gothic: "Zen Kaku Gothic New", sans-serif;
-  --mono: "JetBrains Mono Variable", "Zen Kaku Gothic New", monospace;
+/** ページの見た目の設定。既定(DEFAULT_THEME)は作業報告と会話の要約の見た目そのもの */
+export interface PageTheme {
+  size: { width: number; height: number };
+  colors: Record<ColorToken, string>;
+  fonts: Record<FontRole, string>;
+  motion: Motion;
+  /** あふれたシーンを縮める最小の倍率 */
+  minScale: number;
+  /** paper=同梱の紙面のスタイルを使う / none=動作に要る最小のスタイルだけ */
+  base: "paper" | "none";
+  /** :root に --partial を書くか(自由形式だけ。作業報告と会話の要約の CSS を変えないため) */
+  partialToken?: boolean;
+  /** 書体の読み込み。bundled=同梱の書体の名前と太さで読む / computed=ページの要素が使う書体をすべて読む */
+  fontLoading: "bundled" | "computed";
+  /**
+   * シーンの外(題字や柱)の CSS のアニメーションも、動画の頭からの時刻を入れて止めるか(自由形式。形式の CSS が
+   * どこに動きを書いても、同じ入力から同じ映像にする)。作業報告と会話の要約はシーンの外に動きがないので入れない
+   */
+  seekOutside?: boolean;
+  /** <style> の後に足す <head> の中身(形式の書体の @font-face、形式の CSS の読み込み) */
+  head?: string;
 }
-* { box-sizing: border-box; margin: 0; padding: 0; }
-html, body { width: 1080px; height: 1920px; overflow: hidden; background: var(--paper); }
+
+export const DEFAULT_THEME: PageTheme = {
+  size: { width: VIDEO_WIDTH, height: VIDEO_HEIGHT },
+  colors: { ...DEFAULT_COLORS },
+  fonts: { ...DEFAULT_FONT_FAMILIES },
+  motion: DEFAULT_MOTION,
+  minScale: 0.6,
+  base: "paper",
+  fontLoading: "bundled",
+};
+
+/** :root の色と書体のトークン */
+export function rootStyle(theme: PageTheme): string {
+  const { colors, fonts } = theme;
+  const tokens: Array<[string, string]> = [
+    ["paper", colors.paper],
+    ["ink", colors.ink],
+    ["ink-2", colors.ink2],
+    ["ink-3", colors.ink3],
+    ["rule", colors.rule],
+    ["pass", colors.pass],
+    ["fail", colors.fail],
+    ["skip", colors.skip],
+    ...(theme.partialToken ? ([["partial", colors.partial]] as Array<[string, string]>) : []),
+    ["attention", colors.attention],
+    ["marker", colors.marker],
+    ["serif", fonts.heading],
+    ["gothic", fonts.body],
+    ["mono", fonts.mono],
+  ];
+  return `\n:root {\n${tokens.map(([name, value]) => `  --${name}: ${value};\n`).join("")}}\n`;
+}
+
+/** 同梱の紙面のスタイル(:root のトークンを除く)。docs/design.md の方針で組んだもの */
+export function paperStyle(theme: PageTheme): string {
+  const { size, motion: m } = theme;
+  return String.raw`* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: ${size.width}px; height: ${size.height}px; overflow: hidden; background: var(--paper); }
 body {
   font-family: var(--gothic);
   color: var(--ink);
@@ -366,7 +407,7 @@ body {
   font-kerning: normal;
 }
 .mono { font-family: var(--mono); }
-#stage { position: relative; width: 1080px; height: 1920px; overflow: hidden; background: var(--paper); }
+#stage { position: relative; width: ${size.width}px; height: ${size.height}px; overflow: hidden; background: var(--paper); }
 
 /* 題字(マストヘッド): 上辺の二重罫 */
 header.masthead { position: absolute; top: 72px; left: 80px; right: 80px; }
@@ -384,11 +425,11 @@ main { position: absolute; top: 230px; left: 80px; right: 80px; height: 1180px; 
 /* --u は文字や余白の単位。内容があふれるシーンでは小さくする */
 .content { --u: calc(var(--s, 1) * 1px); display: flex; flex-direction: column; gap: calc(40 * var(--u)); }
 
-.enter { animation: rise 0.38s cubic-bezier(0.2, 0, 0, 1) both; animation-delay: calc(var(--i, 0) * ${ENTER_STEP}s + ${ENTER_OFFSET}s); }
-@keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+.enter { animation: rise ${m.enter.seconds}s cubic-bezier(0.2, 0, 0, 1) both; animation-delay: calc(var(--i, 0) * ${m.enter.step}s + ${m.enter.offset}s); }
+@keyframes rise { from { opacity: 0; transform: translateY(${m.enter.distance}px); } to { opacity: 1; transform: none; } }
 .rule { height: 0; border-top: 2px solid var(--ink); }
 .rule.thin { border-top: 1px solid var(--rule); }
-.rule-in { transform-origin: left center; animation: draw 0.45s cubic-bezier(0.2, 0, 0, 1) both; animation-delay: calc(var(--i, 0) * 0.07s); }
+.rule-in { transform-origin: left center; animation: draw ${m.rule.seconds}s cubic-bezier(0.2, 0, 0, 1) both; animation-delay: calc(var(--i, 0) * ${m.enter.step}s); }
 @keyframes draw { from { transform: scaleX(0); } to { transform: scaleX(1); } }
 
 /* 表紙 */
@@ -507,9 +548,71 @@ footer.folio {
 .right { display: flex; gap: 22px; flex: none; }
 .page { font-variant-numeric: tabular-nums; color: var(--ink-2); font-weight: 700; }
 `;
+}
+
+/** base が none のときのスタイル。シーンの切り替え、縮小、登場の動き、字幕など、動作に要るものだけ */
+export function minimalStyle(theme: PageTheme): string {
+  const { size, motion: m } = theme;
+  return String.raw`
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: ${size.width}px; height: ${size.height}px; overflow: hidden; background: var(--paper); }
+body { font-family: var(--gothic); color: var(--ink); -webkit-font-smoothing: antialiased; }
+#stage { position: relative; width: ${size.width}px; height: ${size.height}px; overflow: hidden; background: var(--paper); }
+main { position: absolute; inset: 0; }
+.scene { position: absolute; inset: 0; display: none; flex-direction: column; }
+.scene.active { display: flex; }
+.content { --u: calc(var(--s, 1) * 1px); }
+.enter { animation: rise ${m.enter.seconds}s cubic-bezier(0.2, 0, 0, 1) both; animation-delay: calc(var(--i, 0) * ${m.enter.step}s + ${m.enter.offset}s); }
+@keyframes rise { from { opacity: 0; transform: translateY(${m.enter.distance}px); } to { opacity: 1; transform: none; } }
+.rule-in { transform-origin: left center; animation: draw ${m.rule.seconds}s cubic-bezier(0.2, 0, 0, 1) both; animation-delay: calc(var(--i, 0) * ${m.enter.step}s); }
+@keyframes draw { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+.stroke { fill: none; stroke: var(--ink); stroke-width: 2; stroke-dasharray: 1; animation: stroke 0.22s cubic-bezier(0.2, 0, 0, 1) both; }
+@keyframes stroke { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+#caption { opacity: 0; }
+`;
+}
+
+/** 同梱の書体を、名前と太さを決め打ちして読み込む(作業報告と会話の要約) */
+const BUNDLED_FONT_LOADS = String.raw`    await Promise.all([
+      ...[500, 700, 800, 900].map((w) => document.fonts.load(w + ' 48px "Noto Serif JP Variable"', text)),
+      ...[400, 500, 700, 900].map((w) => document.fonts.load(w + ' 48px "Zen Kaku Gothic New"', text)),
+      document.fonts.load('400 28px "JetBrains Mono Variable"', text),
+    ]);`;
+
+/**
+ * ページの要素(::before・::after を含む)が使う書体と太さをすべて集め、画面に出る文字と字幕の文字で読み込む(自由形式)。
+ * 形式の CSS が書体や太さを変えても、撮る前に読み込み終える。
+ */
+const COMPUTED_FONT_LOADS = String.raw`    const fonts = new Set();
+    let extra = "";
+    for (const el of document.querySelectorAll("body *")) {
+      for (const pseudo of [null, "::before", "::after"]) {
+        const style = getComputedStyle(el, pseudo);
+        if (pseudo) {
+          if (!style.content || style.content === "none" || style.content === "normal") continue;
+          extra += style.content.replace(/^["']|["']$/g, "");
+        }
+        fonts.add(style.fontStyle + " " + style.fontWeight + " 48px " + style.fontFamily);
+      }
+    }
+    await Promise.all([...fonts].map((font) => document.fonts.load(font, text + extra)));`;
+
+/** シーンの外のアニメーションに、動画の頭からの時刻を入れて止める(自由形式) */
+const SEEK_OUTSIDE = String.raw`
+    for (const animation of document.getAnimations()) {
+      const target = animation.effect && animation.effect.target;
+      if (target && target.closest && target.closest(".scene")) continue;
+      animation.pause();
+      animation.currentTime = t * 1000;
+      const p = animation.effect.getComputedTiming().progress;
+      progress.push(p === null ? -1 : Math.round(p * 1000));
+    }`;
 
 /** ページ内で動くスクリプト。__seek(t) で時刻 t の状態を描き、同じ見た目かどうかの判定キーを返す。 */
-const PAGE_SCRIPT = String.raw`
+function pageScript(theme: PageTheme): string {
+  const m = theme.motion;
+  const fontLoads = theme.fontLoading === "computed" ? COMPUTED_FONT_LOADS : BUNDLED_FONT_LOADS;
+  return String.raw`
 (() => {
   const data = JSON.parse(document.getElementById("timeline-data").textContent);
   const scenes = [...document.querySelectorAll(".scene")];
@@ -526,18 +629,14 @@ const PAGE_SCRIPT = String.raw`
 
   window.__prepare = async () => {
     const text = document.body.textContent + data.scenes.flatMap((s) => s.cues.map((c) => c.text)).join("");
-    await Promise.all([
-      ...[500, 700, 800, 900].map((w) => document.fonts.load(w + ' 48px "Noto Serif JP Variable"', text)),
-      ...[400, 500, 700, 900].map((w) => document.fonts.load(w + ' 48px "Zen Kaku Gothic New"', text)),
-      document.fonts.load('400 28px "JetBrains Mono Variable"', text),
-    ]);
+${fontLoads}
     await document.fonts.ready;
     const fitted = [];
     scenes.forEach((scene, i) => {
       activate(i);
       const content = scene.querySelector(".content");
       let scale = 1;
-      while (content.offsetHeight > main.clientHeight && scale > 0.6) {
+      while (content.offsetHeight > main.clientHeight && scale > ${theme.minScale}) {
         scale = Math.round((scale - 0.04) * 100) / 100;
         content.style.setProperty("--s", String(scale));
       }
@@ -548,7 +647,7 @@ const PAGE_SCRIPT = String.raw`
   };
 
   const clamp01 = (x) => Math.max(0, Math.min(1, x));
-  const CAPTION_LEAD = 0.1;
+  const CAPTION_LEAD = ${m.caption.lead};
 
   window.__seek = (t) => {
     let index = data.scenes.findIndex((s) => t < s.end);
@@ -556,7 +655,7 @@ const PAGE_SCRIPT = String.raw`
     if (index !== current) activate(index);
     const scene = data.scenes[index];
     const local = t - scene.start;
-    const fade = Math.round(clamp01(Math.min(local / 0.2, (scene.end - t) / 0.18)) * 100) / 100;
+    const fade = Math.round(clamp01(Math.min(local / ${m.scene.fadeIn}, (scene.end - t) / ${m.scene.fadeOut})) * 100) / 100;
     const el = scenes[index];
     el.style.opacity = String(fade);
 
@@ -578,18 +677,19 @@ const PAGE_SCRIPT = String.raw`
         caption.textContent = cue.text;
         caption.dataset.key = key;
       }
-      captionOpacity = Math.round(clamp01((t - cue.start + CAPTION_LEAD) / 0.12) * fade * 100) / 100;
+      captionOpacity = Math.round(clamp01((t - cue.start + CAPTION_LEAD) / ${m.caption.fade}) * fade * 100) / 100;
     }
-    caption.style.opacity = String(captionOpacity);
+    caption.style.opacity = String(captionOpacity);${theme.seekOutside ? SEEK_OUTSIDE : ""}
     return [index, fade, progress.join(","), cueIndex, captionOpacity].join("|");
   };
 })();
 `;
+}
 
 export interface PageInput {
-  /** 題字(例: 作業報告) */
-  mastTitle: string;
-  /** 題字の右に出す日付 */
+  /** 題字(例: 作業報告)。undefined なら題字を出さない */
+  mastTitle: string | undefined;
+  /** 題字の右に出す日付。題字も日付もなければ、題字の欄(header.masthead)ごと出さない */
   date: string;
   /** シーンごとの本文。scenes と同じ順 */
   bodies: string[];
@@ -600,11 +700,28 @@ export interface PageInput {
   labels: string[];
   /** 種類に固有のスタイル */
   extraStyle?: string;
+  /** 見た目の設定。省略すると作業報告と会話の要約の見た目(DEFAULT_THEME) */
+  theme?: PageTheme;
+}
+
+function masthead(mastTitle: string | undefined, date: string): string {
+  if (mastTitle === undefined && !date) return "";
+  const title = mastTitle === undefined ? "" : `
+      <div class="mast-title">${escapeHtml(mastTitle)}</div>`;
+  return `
+  <header class="masthead">
+    <div class="mast-row">${title}
+      <div class="mast-meta">${escapeHtml(date)}</div>
+    </div>
+    <div class="double-rule"></div>
+  </header>`;
 }
 
 /** 動画 1 本分のページの枠(題字・本文・字幕・柱)を組む。フォントは /fonts/ 以下から読み込む前提。 */
 export function pageHtml(input: PageInput): string {
   const { mastTitle, date, bodies, scenes, where, labels, extraStyle } = input;
+  const theme = input.theme ?? DEFAULT_THEME;
+  const style = rootStyle(theme) + (theme.base === "paper" ? paperStyle(theme) : minimalStyle(theme));
   const sections = scenes
     .map((scene, i) => `<section class="scene" data-kind="${scene.kind}"><div class="content">${bodies[i] ?? ""}</div></section>`)
     .join("\n");
@@ -623,17 +740,10 @@ export function pageHtml(input: PageInput): string {
 <link rel="stylesheet" href="/fonts/gothic/700.css">
 <link rel="stylesheet" href="/fonts/gothic/900.css">
 <link rel="stylesheet" href="/fonts/mono/index.css">
-<style>${STYLE}${extraStyle ?? ""}</style>
+<style>${style}${extraStyle ?? ""}</style>${theme.head ?? ""}
 </head>
 <body>
-<div id="stage">
-  <header class="masthead">
-    <div class="mast-row">
-      <div class="mast-title">${escapeHtml(mastTitle)}</div>
-      <div class="mast-meta">${escapeHtml(date)}</div>
-    </div>
-    <div class="double-rule"></div>
-  </header>
+<div id="stage">${masthead(mastTitle, date)}
   <main>
 ${sections}
   </main>
@@ -644,7 +754,7 @@ ${sections}
   </footer>
 </div>
 <script id="timeline-data" type="application/json">${data}</script>
-<script>${PAGE_SCRIPT}</script>
+<script>${pageScript(theme)}</script>
 </body>
 </html>`;
 }

@@ -13,7 +13,9 @@ import {
   type ConversationScript,
   isConversationFile,
 } from "./conversation/schema.js";
-import { type SfxSet, type SfxSetting, sfxCues, sfxGain, sfxLayers } from "./audio/sfx.js";
+import { freeSfxCues, type SfxSet, type SfxSetting, sfxCues, sfxGain, sfxLayers } from "./audio/sfx.js";
+import { type LoadedFree, mediaFiles, type ProbedImage } from "./free/files.js";
+import { type FreeFile, isFormatFile, isFreeFile } from "./free/schema.js";
 import type { SessionFacts } from "./facts.js";
 import { isOutputPath } from "./output.js";
 import { redactSecrets } from "./redact.js";
@@ -23,6 +25,7 @@ import {
   checkedReadingsFile,
   compareReadings,
   conversationSceneLines,
+  freeSceneLines,
   loadCheckedReadings,
   mismatchMessage,
   type Readings,
@@ -44,6 +47,8 @@ import { resolveUserPath } from "./util/path.js";
 import { type RenderStats, renderVideo } from "./video/render.js";
 import { buildHtml } from "./video/template.js";
 import { buildConversationHtml } from "./video/conversation.js";
+import { buildFreeHtml } from "./video/free.js";
+import type { Motion } from "./video/motion.js";
 import { buildSceneTimeline, type SceneLines, sceneLines, type Timeline } from "./video/timeline.js";
 
 export { DEFAULT_OUT_DIR } from "./output.js";
@@ -351,13 +356,18 @@ function sfxRecord(sfx: SfxSet): SfxSetting {
 }
 
 /** 読み上げ音声を合成してシーンと字幕の時刻を決め、作業フォルダーに narration.wav を書く。音声がほぼ無音ならエラーにする */
-async function narrate(scenes: SceneLines[], options: RenderPipelineOptions): Promise<{ timeline: Timeline; narrationFile: string }> {
+async function narrate(
+  scenes: SceneLines[],
+  options: RenderPipelineOptions,
+  pause?: Motion["pause"],
+): Promise<{ timeline: Timeline; narrationFile: string }> {
   const { voice } = options.synth;
   const timeline = await buildSceneTimeline(scenes, options.synth, {
     maxSeconds: options.maxSeconds,
     speed: options.speed,
     maxSpeed: options.maxSpeed,
     onProgress: options.onSpeechProgress,
+    ...(pause ? { pause } : {}),
   });
   if (voice) {
     const peak = peakDbfs(timeline.audio);
@@ -482,6 +492,15 @@ export async function isConversationInput(file: string): Promise<boolean> {
   return isConversationFile(await readJson(file));
 }
 
+/** check と render に渡したファイルの種類。report=作業報告(台本か script.json) */
+export async function inputKind(file: string): Promise<"report" | "conversation" | "free" | "format"> {
+  const json = await readJson(file);
+  if (isConversationFile(json)) return "conversation";
+  if (isFreeFile(json)) return "free";
+  if (isFormatFile(json)) return "format";
+  return "report";
+}
+
 /** 会話の要約のファイル(台本と数値。render が残した script.json も同じ形式)を読む */
 export async function loadConversation(file: string): Promise<LoadedConversation> {
   const parsed = ConversationFileSchema.safeParse(await readJson(file));
@@ -569,6 +588,105 @@ export async function renderConversation(input: ConversationRenderInput, options
     onProgress: options.onFrameProgress,
   });
   await assertVideoSize(options.outFile, options.workDir);
+  return {
+    outFile: options.outFile,
+    scriptFile,
+    audioFile: audio.outFile,
+    duration: timeline.duration,
+    speed: timeline.speed,
+    credit: timeline.credit,
+    stats,
+  };
+}
+
+export interface FreeRenderInput {
+  /** 読み込んだ動画ごとのファイル(loadFree)。書かれたままの台本を表示用に整えて描画する */
+  loaded: LoadedFree;
+  /** 画像のシーンの画像(probeImages で確かめたもの) */
+  images: Record<string, ProbedImage>;
+  persona?: { id: string; name: string };
+  readings?: Readings;
+  /** BGM(probeBgm で確かめたもの)。なければ BGM なし */
+  bgm?: BgmTrack;
+  /** 効果音(probeSfx で確かめたもの)。なければ効果音なし */
+  sfx?: SfxSet;
+}
+
+/** 自由形式の台本から音声と映像を作り、mp4 に書き出す。動画の大きさ(バイト数)の上限は設けない */
+export async function renderFree(input: FreeRenderInput, options: RenderPipelineOptions): Promise<RenderResult> {
+  const { voice } = options.synth;
+  const { loaded } = input;
+  const { raw, format, facts } = loaded;
+  // 描画し直せるよう、形式の定義のパス(定義そのものならその定義)と、相対パスの基準のフォルダーを絶対パスで残す
+  const record: FreeFile = {
+    ...raw,
+    ...(loaded.formatFile ? { format: loaded.formatFile } : {}),
+    baseDir: loaded.baseDir,
+    generatedAt: new Date().toISOString(),
+    ...(input.persona ? { persona: input.persona } : {}),
+    voice: voice ? { enabled: true, ...voice } : { enabled: false },
+    ...(input.readings ? { readings: input.readings } : {}),
+    ...(input.bgm ? { bgm: bgmRecord(input.bgm) } : {}),
+    ...(input.sfx ? { sfx: sfxRecord(input.sfx) } : {}),
+  };
+  const scriptFile = path.join(options.workDir, "script.json");
+  await writeFile(scriptFile, `${JSON.stringify(record, null, 2)}\n`);
+
+  const { timeline, narrationFile } = await narrate(freeSceneLines(raw.script, format.limits, facts), options, format.motion.pause);
+  const cues = input.sfx ? freeSfxCues(timeline.scenes, format.motion) : [];
+  const audio = await finishAudio({
+    narrationFile,
+    layers: [...(input.bgm ? [bgmLayer(input.bgm, timeline.duration)] : []), ...(input.sfx ? sfxLayers(input.sfx, cues) : [])],
+    outFile: path.join(options.workDir, "audio.wav"),
+  });
+  const bgm = input.bgm
+    ? { ...bgmRecord(input.bgm), loudness: input.bgm.loudness, gain: Math.round(bgmGain(input.bgm) * 100) / 100 }
+    : null;
+  const sfx = input.sfx
+    ? {
+        ...sfxRecord(input.sfx),
+        sounds: input.sfx.sounds.map((sound) => ({ ...sound, gain: Math.round(sfxGain(sound, input.sfx!.volume) * 100) / 100 })),
+        cues,
+      }
+    : null;
+  const loudness = {
+    input: audio.inputLoudness,
+    output: audio.outputLoudness ?? null,
+    truePeak: audio.outputTruePeak ?? null,
+    normalization: audio.normalization,
+  };
+  await writeFile(
+    path.join(options.workDir, "timeline.json"),
+    `${JSON.stringify(
+      { duration: timeline.duration, speed: timeline.speed, credit: timeline.credit, bgm, sfx, loudness, scenes: timeline.scenes },
+      (_key, value: unknown) => (typeof value === "number" && !Number.isFinite(value) ? null : value),
+      2,
+    )}\n`,
+  );
+
+  const html = buildFreeHtml({
+    script: loaded.script,
+    facts,
+    format,
+    scenes: timeline.scenes,
+    images: input.images,
+    credit: timeline.credit,
+    bgmCredit: input.bgm?.credit,
+    sfxCredit: input.sfx?.credit,
+    silent: !voice,
+  });
+  const stats = await renderVideo(html, {
+    outFile: options.outFile,
+    audioFile: audio.outFile,
+    duration: timeline.duration,
+    fps: options.fps,
+    scale: options.scale,
+    chromiumPath: options.chromiumPath,
+    onProgress: options.onFrameProgress,
+    size: format.size,
+    formatDir: loaded.formatDir,
+    files: mediaFiles(input.images),
+  });
   return {
     outFile: options.outFile,
     scriptFile,

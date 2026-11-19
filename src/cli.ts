@@ -13,13 +13,14 @@ import {
   createSynthesizer,
   DEFAULT_OUT_DIR,
   digestSession,
+  inputKind,
   inspectUnits,
-  isConversationInput,
   loadConversation,
   loadReport,
   loadSession,
   prepareOutputRoot,
   renderConversation,
+  renderFree,
   renderReport,
   resolveRenderPaths,
   saveCheckedReadings,
@@ -27,10 +28,14 @@ import {
   verifyUnits,
 } from "./pipeline.js";
 import { checkConversationScript } from "./conversation/check.js";
-import { checkScript, type ScriptIssue } from "./script/check.js";
+import { checkFormatDefinition, checkFreeFile } from "./free/check.js";
+import { checkFormatFiles, loadFormatFile, loadFree, probeImages } from "./free/files.js";
+import { defaultFormatDefinition, resolveFormat } from "./free/format.js";
+import { checkScript, narrationBudget, type ScriptIssue } from "./script/check.js";
 import {
   BUILTIN_READINGS,
   conversationSpeechUnits,
+  freeSpeechUnits,
   loadProjectReadings,
   type Readings,
   type ResolvedReadings,
@@ -47,6 +52,7 @@ import { START_TIMEOUT_MS } from "./tts/start.js";
 import { DEFAULT_SPEAKER, DEFAULT_VOICEVOX_URL, VoicevoxClient, VoicevoxSynthesizer } from "./tts/voicevox.js";
 import { log, progress } from "./util/log.js";
 import { formatDateTime, formatStamp } from "./util/time.js";
+import { bundledFreeStyle } from "./video/free.js";
 
 const { version } = createRequire(import.meta.url)("../package.json") as { version: string };
 
@@ -321,7 +327,7 @@ withSfxOptions(
     if (environment.some((item) => item.status === "missing")) process.exitCode = 1;
   });
 
-type CheckFlags = SessionFlags & VoiceFlags & { seconds: number; json?: boolean };
+type CheckFlags = SessionFlags & VoiceFlags & { seconds: number; json?: boolean; format?: string };
 
 /** 読み上げ文 1 文の読みの確認結果(--json の出力) */
 interface CheckedSentence {
@@ -341,8 +347,8 @@ interface CheckedSentence {
  * 欄をなくしたり意味を変えたりしない(README の「互換性の決まり」)。
  */
 interface CheckOutput {
-  /** report=作業報告 / conversation=会話の要約 */
-  kind: "report" | "conversation";
+  /** report=作業報告 / conversation=会話の要約 / free=自由形式 / format=形式の定義(定義だけを確かめた) */
+  kind: "report" | "conversation" | "free" | "format";
   file: string;
   title: string;
   narration: { sentences: number; chars: number; budget: number; seconds: number };
@@ -350,7 +356,10 @@ interface CheckOutput {
   persona: string | null;
   /** 数値との照合(作業報告のみ) */
   facts?: string;
-  /** 直したほうがよい点。at は台本の中の位置(会話の要約では、ファイルの script の中の位置) */
+  /**
+   * 直したほうがよい点。at は台本の中の位置(会話の要約では、ファイルの script の中の位置。
+   * 自由形式では、動画ごとのファイルの中の位置(script.〜、facts.〜、format.〜)。形式の定義では、定義の中の位置)
+   */
   issues: ScriptIssue[];
   readings:
     | { status: "checked"; engine: string; speaker: { id: number; name: string }; review: number; sentences: CheckedSentence[]; savedTo: string }
@@ -362,8 +371,12 @@ function checkText(output: CheckOutput, status: string): string {
   const { narration, readings } = output;
   const lines = [
     `形式: 正しい(「${output.title}」、${status})`,
-    `読み上げ文: ${narration.sentences} 文、計 ${narration.chars} 文字(目安 ${narration.budget} 文字、約 ${narration.seconds} 秒)`,
-    `口調: ${output.persona ? `${output.persona}(文末を確認)` : "丁寧語"}`,
+    ...(output.kind === "format"
+      ? []
+      : [
+          `読み上げ文: ${narration.sentences} 文、計 ${narration.chars} 文字(目安 ${narration.budget} 文字、約 ${narration.seconds} 秒)`,
+          `口調: ${output.persona ? `${output.persona}(文末を確認)` : "丁寧語"}`,
+        ]),
     ...(output.facts ? [`数値: ${output.facts}`] : []),
     output.issues.length > 0 ? `警告 ${output.issues.length} 件:` : "警告: なし",
     ...output.issues.map((issue) => `- ${issue.at}: ${issue.message}`),
@@ -422,16 +435,57 @@ withSecondsOption(
         .description(
           "台本を確かめる(形式、口調、長さ、読み上げにくい表記、数値との食い違い、全文の読み)。確かめた読みは render が照らし合わせる。描画はしない",
         )
-        .argument("<report>", "台本(report.json)、script.json、または会話の要約のファイル(kind: conversation)のパス"),
+        .argument(
+          "<report>",
+          "台本(report.json)、script.json、会話の要約のファイル(kind: conversation)、自由形式のファイル(kind: free)、または形式の定義(kind: format)のパス",
+        ),
     ),
   ),
 )
   .option("--json", "結果を JSON で出す(読みの確認の結果を、プログラムや AI が読みやすい形で出す)")
+  .option("--format <file>", "自由形式の形式の定義(format.json)。ファイルに書いた format より優先する")
   .action(async (reportPath: string, flags: CheckFlags) => {
     const persona = await choosePersona(flags);
     let output: CheckOutput;
     let status: string;
-    if (await isConversationInput(reportPath)) {
+    const kind = await inputKind(reportPath);
+    if (flags.format && kind !== "free") throw new Error("--format は、自由形式のファイル(kind: free)にだけ使えます。");
+    if (kind === "format") {
+      const loaded = await loadFormatFile(reportPath);
+      const format = resolveFormat(loaded.definition);
+      const files = await checkFormatFiles(format, loaded.dir);
+      status = "形式の定義";
+      output = {
+        kind: "format",
+        file: loaded.file,
+        title: loaded.definition.name ?? path.basename(loaded.dir),
+        narration: { sentences: 0, chars: 0, budget: narrationBudget(flags.seconds), seconds: flags.seconds },
+        persona: persona?.name ?? null,
+        issues: [...checkFormatDefinition(format), ...files.issues],
+        readings: { status: "skipped", reason: "形式の定義だけを確かめた" },
+      };
+    } else if (kind === "free") {
+      const loaded = await loadFree(reportPath, flags.format);
+      const result = checkFreeFile(loaded.raw, { format: loaded.format, persona, seconds: flags.seconds });
+      const files = await checkFormatFiles(loaded.format, loaded.formatDir, "format.");
+      const images = await probeImages(loaded);
+      const resolved = await resolveReadings(loaded.raw.script, loaded.raw.readings);
+      status = `自由形式、${loaded.format.name ? `形式「${loaded.format.name}」` : loaded.formatFile || loaded.raw.format ? "形式の定義あり" : "既定の形式"}`;
+      output = {
+        kind: "free",
+        file: path.resolve(reportPath),
+        title: loaded.script.title,
+        narration: { sentences: result.sentences, chars: result.narrationChars, budget: result.budget, seconds: flags.seconds },
+        persona: persona?.name ?? null,
+        issues: [...result.issues, ...files.issues, ...images.issues, ...readingIssues(resolved)],
+        readings: await checkReadings(
+          reportPath,
+          freeSpeechUnits(loaded.raw.script, loaded.format.limits, loaded.facts),
+          resolved.readings,
+          flags,
+        ),
+      };
+    } else if (kind === "conversation") {
       const conversation = await loadConversation(reportPath);
       const result = checkConversationScript(conversation.raw, { persona, seconds: flags.seconds });
       const resolved = await resolveReadings(conversation.raw, conversation.readings);
@@ -480,7 +534,7 @@ type RenderCommandFlags = SessionFlags &
   VoiceFlags &
   RenderFlags &
   BgmFlags &
-  SfxFlags & { credit?: string; out?: string; videoDir?: string; workDir?: string; seconds: number; timezone?: string };
+  SfxFlags & { credit?: string; out?: string; videoDir?: string; workDir?: string; seconds: number; timezone?: string; format?: string };
 
 withSfxOptions(
   withBgmOptions(
@@ -495,7 +549,7 @@ withSfxOptions(
                   .description("台本から動画を作る。画面の数値はセッションログから集計する")
                   .argument(
                     "<report>",
-                    "台本(report.json)、描画済みの script.json(記録された数値で描画し直す)、または会話の要約のファイル(kind: conversation)",
+                    "台本(report.json)、描画済みの script.json(記録された数値で描画し直す)、会話の要約のファイル(kind: conversation)、または自由形式のファイル(kind: free)",
                   ),
               ),
             ),
@@ -511,9 +565,17 @@ withSfxOptions(
     "--work-dir <dir>",
     "作業ファイル(narration.wav・audio.wav・timeline.json・script.json)を置くフォルダ。-o と組み合わせ、出力先に動画だけを置くのに使う",
   )
+  .option("--format <file>", "自由形式の形式の定義(format.json)。ファイルに書いた format より優先する")
   .action(async (reportPath: string, flags: RenderCommandFlags) => {
-    if (await isConversationInput(reportPath)) {
+    const kind = await inputKind(reportPath);
+    if (flags.format && kind !== "free") throw new Error("--format は、自由形式のファイル(kind: free)にだけ使えます。");
+    if (kind === "format") throw new Error("形式の定義だけでは動画を作れません。動画ごとのファイル(kind: free)を渡し、形式の定義は --format で指定してください。");
+    if (kind === "conversation") {
       await renderConversationCommand(reportPath, flags);
+      return;
+    }
+    if (kind === "free") {
+      await renderFreeCommand(reportPath, flags);
       return;
     }
     const report = await loadReport(reportPath);
@@ -658,6 +720,123 @@ async function renderConversationCommand(reportPath: string, flags: RenderComman
   if (result.credit) log(`クレジット表記: ${result.credit}(VOICEVOX の利用規約により必要です)`);
   process.stdout.write(`${result.outFile}\n`);
 }
+
+/** 自由形式を描画する。数値はファイルの facts を使い、BGM と効果音は作業報告と同じく付けられる */
+async function renderFreeCommand(reportPath: string, flags: RenderCommandFlags): Promise<void> {
+  const loaded = await loadFree(reportPath, flags.format);
+  log(`形式: ${loaded.formatFile ?? (loaded.raw.format ? "ファイルに書いた定義" : "既定の形式")}${loaded.format.name ? `(${loaded.format.name})` : ""}`);
+  log("数値: ファイルの facts を使います");
+  // 形式の CSS・書体・画像のファイルが無い・読めない場合は、時間のかかる音声合成と描画の前に止める
+  const files = await checkFormatFiles(loaded.format, loaded.formatDir, "format.");
+  const images = await probeImages(loaded);
+  const missing = [...files.missing, ...images.missing];
+  if (missing.length > 0) throw new Error(`描画に使うファイルを読めません:\n${missing.map((issue) => `- ${issue.at}: ${issue.message}`).join("\n")}`);
+
+  const bgmSetting = resolveBgm(flags, process.env, loaded.raw.bgm);
+  const bgm = bgmSetting ? await probeBgm(bgmSetting) : undefined;
+  log(`BGM: ${bgm ? describeBgm(bgm) : "なし"}`);
+  const sfxSetting = resolveSfx(flags, process.env, loaded.raw.sfx);
+  const sfx = sfxSetting ? await probeSfx(sfxSetting) : undefined;
+  log(`効果音: ${sfx ? describeSfx(sfx) : "なし"}`);
+
+  const resolved = await resolveReadings(loaded.raw.script, loaded.raw.readings);
+  // 読み上げありで VOICEVOX に接続できなければ、ここで止める(字幕のみには切り替えない)
+  const synth = await createSynthesizer({ ...flags, readings: resolved.readings, startCommand: engineStart.command, onStart: engineStart.onStart });
+  if (!flags.voice) log("読み上げ: なし(字幕のみ。動画の柱に「音声なし」と表示します)");
+  if (synth instanceof VoicevoxSynthesizer) {
+    // check で確かめた読みと一致しなければ、音声を作る前に止める
+    const count = await verifyUnits(reportPath, freeSpeechUnits(loaded.raw.script, loaded.format.limits, loaded.facts), synth);
+    log(`読み: check で確かめた読みと一致(${count} 文)`);
+  }
+
+  const persona = await choosePersona(flags);
+  log(`口調: ${persona?.name ?? "丁寧語"}`);
+  const issues = [
+    ...checkFreeFile(loaded.raw, { format: loaded.format, persona, seconds: flags.seconds }).issues,
+    ...files.issues,
+    ...images.issues,
+    ...readingIssues(resolved),
+  ];
+  for (const issue of issues) log(`注意: ${issue.at}: ${issue.message}`);
+  const mismatch = flags.voice ? personaMismatch(loaded.raw.persona, flags.speaker) : undefined;
+  if (mismatch) log(`注意: ${mismatch}`);
+
+  const { outFile, workDir } = resolveRenderPaths({
+    report: reportPath,
+    title: loaded.script.title,
+    out: flags.out,
+    videoDir: flags.videoDir,
+    workDir: flags.workDir,
+  });
+  await mkdir(workDir, { recursive: true });
+  await mkdir(path.dirname(outFile), { recursive: true });
+  const result = await renderFree(
+    {
+      loaded,
+      images: images.images,
+      persona: persona ? { id: persona.id, name: persona.name } : loaded.raw.persona,
+      readings: resolved.readings,
+      bgm,
+      sfx,
+    },
+    {
+      outFile,
+      workDir,
+      synth,
+      speed: flags.speed,
+      maxSpeed: MAX_SPEED,
+      maxSeconds: flags.seconds * LENGTH_TOLERANCE,
+      fps: flags.fps,
+      chromiumPath: flags.chromium,
+      timeZone: flags.timezone,
+      onSpeechProgress: progress(flags.voice ? "音声合成" : "字幕の時間割り当て"),
+      onFrameProgress: progress("描画"),
+    },
+  );
+  // 内容が本文の枠からあふれ、縮めたシーンと、最小まで縮めても収まらなかったシーンを知らせる(動画は作る)
+  const { fitScales, overflows, blocked } = result.stats;
+  const pages = fitScales.length;
+  fitScales.forEach((scale, i) => {
+    if (overflows[i]) log(`注意: ${i + 1} / ${pages} ページは、${scale} 倍まで縮めても本文の枠に収まりません。文字を減らすか、上限を見直してください。`);
+    else if (scale < 1) log(`注意: ${i + 1} / ${pages} ページは、本文の枠に収めるため ${scale} 倍に縮めました。`);
+  });
+  for (const url of blocked) log(`注意: 外部への読み込みを止めました(描画では外部と通信しません): ${url}`);
+  log(`完了: ${result.outFile}(${result.duration.toFixed(1)} 秒、話速 ${result.speed}、撮影 ${result.stats.captured}/${result.stats.frames} フレーム)`);
+  if (result.credit) log(`クレジット表記: ${result.credit}(VOICEVOX の利用規約により必要です)`);
+  if (bgm?.credit) log(`BGM のクレジット: ${bgm.credit}`);
+  process.stdout.write(`${result.outFile}\n`);
+}
+
+const formatCommand = program.command("format").description("自由形式の形式の定義を扱う");
+
+formatCommand
+  .command("init")
+  .description("形式を作り始める。既定の値をすべて書いた format.json と、同梱のスタイルを写した style.css を作る")
+  .argument("<dir>", "形式のフォルダー(なければ作る)")
+  .option("--name <name>", "形式の名前(省略時はフォルダーの名前)")
+  .option("--force", "既にある format.json と style.css を上書きする")
+  .action(async (dir: string, flags: { name?: string; force?: boolean }) => {
+    const root = path.resolve(dir);
+    const formatFile = path.join(root, "format.json");
+    const styleFile = path.join(root, "style.css");
+    const existing = [formatFile, styleFile].filter((file) => existsSync(file));
+    if (existing.length > 0 && !flags.force) throw new Error(`既にあります: ${existing.join("、")}。上書きするときは --force を付けてください。`);
+    await mkdir(root, { recursive: true });
+    const definition = defaultFormatDefinition(flags.name ?? path.basename(root), "style.css");
+    await writeFile(formatFile, `${JSON.stringify(definition, null, 2)}\n`);
+    const header = [
+      "/*",
+      " * 同梱のスタイル(base: paper)を写したもの。dopagakix format init が作成。",
+      " * base が paper のままなら、同梱のスタイルの後にこのファイルを読み込むので、ここに書いた規則が上書きします。",
+      " * base を none にすると、同梱のスタイルは読み込まず、このファイルだけで紙面を組みます。",
+      " * 色と書体のトークン(:root の CSS 変数)、大きさ、動きの長さ(登場と罫線)は format.json の colors、fonts、size、motion に書きます。",
+      " * 公開している要素とクラスの名前は docs/format.md を参照してください。",
+      " */",
+    ].join("\n");
+    await writeFile(styleFile, `${header}\n${bundledFreeStyle(resolveFormat(definition)).trimStart()}`);
+    log(`作りました: ${formatFile}、${styleFile}`);
+    process.stdout.write(`${formatFile}\n`);
+  });
 
 withSessionOptions(program.command("digest").description("セッションログを時系列のダイジェストにする(作業の振り返り用)"))
   .option("-o, --out <file>", "書き出し先(省略時は標準出力)")

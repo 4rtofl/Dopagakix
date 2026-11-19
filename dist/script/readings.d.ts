@@ -1,6 +1,9 @@
 import { z } from "zod";
 import { conversationNarrations } from "../conversation/normalize.js";
 import type { ConversationScript } from "../conversation/schema.js";
+import type { FreeLimits } from "../free/format.js";
+import { type FreeNarrationKind } from "../free/normalize.js";
+import type { FreeFacts, FreeScript } from "../free/schema.js";
 import { type VideoScript } from "./schema.js";
 /** 読みの指定(表記 → 読み)。VOICEVOX に送る文だけを置き換え、字幕と画面の文字は元の表記のままにする */
 export type Readings = Record<string, string>;
@@ -42,6 +45,13 @@ export declare function conversationSpeechUnits(script: ConversationScript): Spe
 /** 会話の要約の台本の、シーンごとの読み上げ文(字幕 1 枚ごとに分けたもの)。描画の順 */
 export declare function conversationSceneLines(script: ConversationScript): Array<{
     kind: ReturnType<typeof conversationNarrations>[number]["kind"];
+    lines: string[];
+}>;
+/** 自由形式の台本の読み上げ文を、描画のときに音声を作るのと同じ単位にする。at は動画ごとのファイルの中の位置(script.〜) */
+export declare function freeSpeechUnits(script: FreeScript, limits: FreeLimits, facts?: FreeFacts): SpeechUnit[];
+/** 自由形式の台本の、シーンごとの読み上げ文(字幕 1 枚ごとに分けたもの)。描画の順 */
+export declare function freeSceneLines(script: FreeScript, limits: FreeLimits, facts?: FreeFacts): Array<{
+    kind: FreeNarrationKind;
     lines: string[];
 }>;
 /** 読みの確認結果(check が保存し、render が照らし合わせる) */

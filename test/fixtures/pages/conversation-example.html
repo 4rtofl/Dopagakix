@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="/fonts/serif/index.css">
+<link rel="stylesheet" href="/fonts/gothic/400.css">
+<link rel="stylesheet" href="/fonts/gothic/500.css">
+<link rel="stylesheet" href="/fonts/gothic/700.css">
+<link rel="stylesheet" href="/fonts/gothic/900.css">
+<link rel="stylesheet" href="/fonts/mono/index.css">
+<style>
+:root {
+  --paper: #f5f5f1;
+  --ink: #17171b;
+  --ink-2: #4a4a53;
+  --ink-3: #6e6e78;
+  --rule: rgba(23, 23, 27, 0.18);
+  --pass: #1e7a4c;
+  --fail: #b42318;
+  --skip: #6e6e78;
+  --attention: #c2410c;
+  --marker: #ffe58a;
+  --serif: "Noto Serif JP Variable", serif;
+  --gothic: "Zen Kaku Gothic New", sans-serif;
+  --mono: "JetBrains Mono Variable", "Zen Kaku Gothic New", monospace;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 1080px; height: 1920px; overflow: hidden; background: var(--paper); }
+body {
+  font-family: var(--gothic);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  line-break: strict;
+  word-break: auto-phrase;
+  font-kerning: normal;
+}
+.mono { font-family: var(--mono); }
+#stage { position: relative; width: 1080px; height: 1920px; overflow: hidden; background: var(--paper); }
+
+/* 題字(マストヘッド): 上辺の二重罫 */
+header.masthead { position: absolute; top: 72px; left: 80px; right: 80px; }
+.mast-row { display: flex; justify-content: space-between; align-items: baseline; gap: 24px; }
+.mast-title { font-family: var(--serif); font-weight: 900; font-size: 40px; letter-spacing: 0.08em; }
+.mast-meta { font-size: 26px; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.double-rule { margin-top: 18px; border-top: 4px solid var(--ink); padding-top: 5px; }
+.double-rule::after { content: ""; display: block; border-top: 1.5px solid var(--ink); }
+
+main { position: absolute; top: 230px; left: 80px; right: 80px; height: 1180px; }
+/* 本文ページは天揃え(見出しの位置をそろえる)。表紙だけ中央に置く */
+.scene { position: absolute; inset: 0; display: none; flex-direction: column; justify-content: flex-start; padding-top: 40px; }
+.scene[data-kind="opening"] { justify-content: center; padding-top: 0; }
+.scene.active { display: flex; }
+/* --u は文字や余白の単位。内容があふれるシーンでは小さくする */
+.content { --u: calc(var(--s, 1) * 1px); display: flex; flex-direction: column; gap: calc(40 * var(--u)); }
+
+.enter { animation: rise 0.38s cubic-bezier(0.2, 0, 0, 1) both; animation-delay: calc(var(--i, 0) * 0.07s + 0.06s); }
+@keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+.rule { height: 0; border-top: 2px solid var(--ink); }
+.rule.thin { border-top: 1px solid var(--rule); }
+.rule-in { transform-origin: left center; animation: draw 0.45s cubic-bezier(0.2, 0, 0, 1) both; animation-delay: calc(var(--i, 0) * 0.07s); }
+@keyframes draw { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+
+/* 表紙 */
+.title {
+  font-family: var(--serif); font-weight: 900; font-size: calc(104 * var(--u)); line-height: 1.22;
+  letter-spacing: -0.005em; font-feature-settings: "palt"; text-wrap: balance;
+}
+.title.mid { font-size: calc(84 * var(--u)); }
+.title.long { font-size: calc(72 * var(--u)); }
+.facts { display: flex; flex-direction: column; gap: calc(26 * var(--u)); }
+.fact-row { display: grid; grid-template-columns: calc(150 * var(--u)) 1fr; gap: calc(24 * var(--u)); align-items: start; }
+.fact-label { font-size: calc(26 * var(--u)); font-weight: 700; color: var(--ink-3); letter-spacing: 0.04em; padding-top: calc(10 * var(--u)); }
+.result-line {
+  display: flex; align-items: baseline; gap: calc(16 * var(--u));
+  font-size: calc(58 * var(--u)); font-weight: 900; color: var(--status); line-height: 1.2;
+}
+.result-line .mark { font-family: var(--serif); font-weight: 700; }
+.lede { margin-top: calc(14 * var(--u)); font-size: calc(40 * var(--u)); font-weight: 500; line-height: 1.6; color: var(--ink-2); text-wrap: balance; }
+.figures { display: grid; grid-template-columns: 1fr 1.3fr 1fr; }
+.figure { padding: 0 calc(22 * var(--u)); border-left: 1px solid var(--rule); }
+.figure:first-child { padding-left: 0; border-left: none; }
+.figure .num {
+  margin-top: calc(6 * var(--u)); font-family: var(--serif); font-weight: 800; font-size: calc(76 * var(--u));
+  line-height: 1.1; font-variant-numeric: tabular-nums lining-nums; white-space: nowrap;
+}
+.figure .num small { font-family: var(--gothic); font-size: calc(30 * var(--u)); font-weight: 700; margin-left: calc(6 * var(--u)); color: var(--ink-2); }
+.figure .num .sub { display: block; font-size: calc(34 * var(--u)); font-weight: 700; margin-top: calc(2 * var(--u)); }
+.when { font-size: calc(26 * var(--u)); color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.plus { color: var(--pass); }
+.minus { color: var(--fail); }
+.plus.zero, .minus.zero { color: var(--ink-3); }
+
+/* 欄見出し */
+.section { display: flex; flex-direction: column; gap: calc(18 * var(--u)); }
+.section-title { font-size: calc(42 * var(--u)); font-weight: 900; letter-spacing: 0.04em; }
+.section.attention .rule { border-top-color: var(--attention); border-top-width: 4px; }
+.section.attention .section-title { color: var(--attention); }
+
+/* 罫線で区切った行 */
+.rows { list-style: none; display: flex; flex-direction: column; }
+.row {
+  display: grid; grid-template-columns: calc(64 * var(--u)) 1fr auto; column-gap: calc(18 * var(--u)); align-items: baseline;
+  padding: calc(24 * var(--u)) 0; border-bottom: 1px solid var(--rule);
+}
+.row:first-child { padding-top: calc(4 * var(--u)); }
+.row-text { font-size: calc(46 * var(--u)); font-weight: 700; line-height: 1.45; text-wrap: balance; }
+.num-mark { font-family: var(--serif); font-weight: 800; font-size: calc(48 * var(--u)); color: var(--ink-3); font-variant-numeric: lining-nums; }
+.check-mark { font-family: var(--serif); font-weight: 800; font-size: calc(52 * var(--u)); line-height: 1; }
+.check-result { font-size: calc(32 * var(--u)); font-weight: 700; white-space: nowrap; }
+.check.pass .check-mark, .check.pass .check-result { color: var(--pass); }
+.check.fail .check-mark, .check.fail .check-result { color: var(--fail); }
+.check.not_run .check-mark, .check.not_run .check-result { color: var(--skip); }
+.statement { display: flex; align-items: baseline; gap: calc(22 * var(--u)); font-size: calc(50 * var(--u)); font-weight: 900; line-height: 1.4; }
+.statement.ok { color: var(--pass); }
+.statement.warn { color: var(--ink-2); }
+
+/* 変更ファイル */
+.files { padding-top: calc(6 * var(--u)); }
+.files-head { font-size: calc(30 * var(--u)); font-weight: 700; color: var(--ink-2); margin-bottom: calc(10 * var(--u)); }
+.files-head b { color: var(--ink); font-size: calc(36 * var(--u)); }
+.files ul { list-style: none; }
+.file { font-size: calc(28 * var(--u)); border-bottom: 1px dotted var(--rule); }
+.file-line { display: flex; justify-content: space-between; gap: calc(24 * var(--u)); line-height: 1.6; }
+.file .path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file .diff { flex: none; font-variant-numeric: tabular-nums; }
+.file .new { font-family: var(--gothic); font-size: calc(22 * var(--u)); font-weight: 700; color: var(--ink-2); border: 1px solid var(--ink-3); padding: 0 calc(8 * var(--u)); margin-right: calc(14 * var(--u)); vertical-align: 2px; }
+/* 変更行数の棒: 追加(緑)と削除(赤)を続けて置く。行の高さを大きく変えないよう細くする */
+.bar { display: flex; height: calc(6 * var(--u)); margin: calc(2 * var(--u)) 0 calc(8 * var(--u)); }
+.bar-add { background: var(--pass); }
+.bar-del { background: var(--fail); }
+.files .more { font-size: calc(26 * var(--u)); color: var(--ink-3); margin-top: calc(8 * var(--u)); }
+
+/* 判断事項: 見出しに蛍光ペンの下線 */
+.decision .row-text { font-weight: 400; }
+.d-title { font-size: calc(48 * var(--u)); font-weight: 900; line-height: 1.45; text-wrap: balance; }
+.d-detail { margin-top: calc(10 * var(--u)); font-size: calc(34 * var(--u)); font-weight: 500; line-height: 1.6; color: var(--ink-2); text-wrap: pretty; }
+
+/* 図解: 枠と矢印は墨の細い罫線。角丸・影・背景の塗りは使わない(カードに見せない) */
+.ba { display: flex; flex-direction: column; align-items: stretch; }
+.ba-side { border: 1.5px solid var(--ink); padding: calc(22 * var(--u)) calc(36 * var(--u)) calc(28 * var(--u)); }
+.ba-side.before { border-color: var(--ink-3); border-width: 1px; }
+.ba-label { font-size: calc(28 * var(--u)); font-weight: 700; color: var(--ink-3); letter-spacing: 0.04em; margin-bottom: calc(10 * var(--u)); }
+.ba-lines { list-style: none; display: flex; flex-direction: column; gap: calc(8 * var(--u)); }
+.ba-lines li { font-size: calc(44 * var(--u)); font-weight: 700; line-height: 1.45; }
+.ba-side.before .ba-lines li { font-weight: 500; color: var(--ink-2); }
+.ba-arrow .stroke { stroke-width: 1.4; }
+.ba-arrow { display: block; align-self: center; width: calc(36 * var(--u)); height: calc(72 * var(--u)); margin: calc(10 * var(--u)) 0; }
+.flow { list-style: none; display: flex; flex-direction: column; }
+.step { border: 1.5px solid var(--ink); padding: calc(16 * var(--u)) calc(30 * var(--u)); }
+.step-label { font-size: calc(42 * var(--u)); font-weight: 700; line-height: 1.4; }
+.step-note { margin-top: calc(4 * var(--u)); font-size: calc(30 * var(--u)); font-weight: 500; line-height: 1.5; color: var(--ink-2); }
+.step .marker, .flow-arrow svg { display: block; margin: 0 auto; width: calc(28 * var(--u)); height: calc(52 * var(--u)); }
+.stroke { fill: none; stroke: var(--ink); stroke-width: 2; stroke-dasharray: 1; animation: stroke 0.22s cubic-bezier(0.2, 0, 0, 1) both; }
+@keyframes stroke { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+
+/* 結び */
+.next .row { grid-template-columns: calc(56 * var(--u)) 1fr; }
+.arrow { font-family: var(--serif); font-weight: 700; font-size: calc(44 * var(--u)); color: var(--ink-3); }
+.end-mark { align-self: flex-end; font-family: var(--serif); font-weight: 800; font-size: calc(64 * var(--u)); letter-spacing: 0.2em; }
+.credits { font-size: calc(26 * var(--u)); line-height: 1.8; color: var(--ink-3); border-top: 1px solid var(--rule); padding-top: calc(18 * var(--u)); }
+
+/* 字幕: 墨ベタに白抜き */
+.caption-zone { position: absolute; left: 60px; right: 60px; top: 1450px; height: 300px; display: flex; align-items: center; justify-content: center; }
+/* 幅は文の長さによらず一定。均等改行(balance)は文節の途中で切れやすいので使わない */
+#caption {
+  width: 100%; padding: 24px 40px; background: var(--ink); color: var(--paper);
+  font-size: 46px; font-weight: 700; line-height: 1.5; text-align: center; text-wrap: pretty; opacity: 0;
+}
+
+/* 柱(フッター) */
+footer.folio {
+  position: absolute; left: 80px; right: 80px; bottom: 60px; padding-top: 14px; border-top: 1px solid var(--rule);
+  display: flex; justify-content: space-between; align-items: baseline; gap: 24px; font-size: 24px; color: var(--ink-3);
+}
+.where { font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.right { display: flex; gap: 22px; flex: none; }
+.page { font-variant-numeric: tabular-nums; color: var(--ink-2); font-weight: 700; }
+
+.lede.gist { margin-top: 0; color: var(--ink); font-weight: 700; }
+.figures.even { grid-template-columns: 1fr 1fr 1fr; }
+.topic-heading {
+  font-family: var(--serif); font-weight: 900; font-size: calc(72 * var(--u)); line-height: 1.3;
+  font-feature-settings: "palt"; text-wrap: balance;
+}
+.topic-lines { display: flex; flex-direction: column; gap: calc(14 * var(--u)); border-top: 1px solid var(--rule); padding-top: calc(28 * var(--u)); }
+.topic-line { font-size: calc(44 * var(--u)); font-weight: 500; line-height: 1.6; color: var(--ink-2); text-wrap: pretty; }
+/* 引用: 明朝の大きな文字を鉤括弧で囲む。枠・色帯・背景の塗りは使わない */
+.quote { display: flex; flex-direction: column; gap: calc(28 * var(--u)); padding-top: calc(12 * var(--u)); }
+.quote-text {
+  font-family: var(--serif); font-weight: 700; font-size: calc(58 * var(--u)); line-height: 1.6;
+  font-feature-settings: "palt"; text-wrap: pretty; text-indent: -0.5em; padding-left: 0.5em;
+}
+.quote-text::before { content: "「"; }
+.quote-text::after { content: "」"; }
+.quote-by { align-self: flex-end; font-size: calc(36 * var(--u)); font-weight: 700; color: var(--ink-2); }
+.quote-by::before { content: "― "; color: var(--ink-3); }
+.point { font-size: calc(52 * var(--u)); font-weight: 900; line-height: 1.45; text-wrap: balance; }
+/* 論点は蛍光ペンの下線で示す(判断事項と同じ --marker) */
+.point .hl { background: linear-gradient(transparent 62%, var(--marker) 62%); -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+.opinions .row, .outcome .row { grid-template-columns: calc(56 * var(--u)) 1fr; }
+.dash { font-family: var(--serif); font-weight: 700; font-size: calc(40 * var(--u)); color: var(--ink-3); }
+.outcome { display: flex; flex-direction: column; gap: calc(6 * var(--u)); }
+.outcome-label { font-size: calc(30 * var(--u)); font-weight: 700; color: var(--ink-2); letter-spacing: 0.04em; }
+.outcome.decided .check-mark { color: var(--pass); }
+.outcome.open .check-mark { color: #9a6200; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <header class="masthead">
+    <div class="mast-row">
+      <div class="mast-title">会話の要約</div>
+      <div class="mast-meta">2026.11.12</div>
+    </div>
+    <div class="double-rule"></div>
+  </header>
+  <main>
+<section class="scene" data-kind="opening"><div class="content">
+    <h1 class="enter title mid" style="--i:0">リリース日の見直し</h1>
+    <div class="facts">
+      <div class="rule rule-in" style="--i:1"></div>
+      <div class="enter fact-row" style="--i:2">
+        <div class="fact-label">要旨</div>
+        <div class="fact-body"><p class="lede gist">検索の不具合を直してから出すため、リリースを1週間延ばす</p></div>
+      </div>
+      <div class="rule thin rule-in" style="--i:3"></div>
+      <div class="enter figures even" style="--i:4">
+        <div class="figure"><div class="fact-label">参加者</div><div class="num">4<small>人</small></div></div>
+        <div class="figure"><div class="fact-label">発言</div><div class="num">38<small>件</small></div></div>
+        <div class="figure"><div class="fact-label">期間</div><div class="num">1.6<small>時間</small></div></div>
+      </div>
+      <div class="rule thin rule-in" style="--i:5"></div>
+    </div>
+    <div class="enter when" style="--i:6">2026/11/12 10:02 – 11:41</div></div></section>
+<section class="scene" data-kind="topic"><div class="content"><div class="section"><div class="rule rule-in"></div><h2 class="enter topic-heading" style="--i:0">来週のリリースを出すか</h2></div>
+    <div class="topic-lines"><p class="enter topic-line" style="--i:1">検索で古い結果が出る不具合が見つかった</p><p class="enter topic-line" style="--i:2">直してから出すか、そのまま出すかを相談</p></div></div></section>
+<section class="scene" data-kind="flow"><div class="content"><div class="section"><div class="rule rule-in"></div><h2 class="enter section-title" style="--i:0">話の流れ</h2></div><ol class="rows flow-rows"><li class="enter row" style="--i:1"><span class="num-mark">1</span><span class="row-text">テストで検索の不具合が見つかる</span></li><li class="enter row" style="--i:2"><span class="num-mark">2</span><span class="row-text">原因はキャッシュの更新漏れと分かる</span></li><li class="enter row" style="--i:3"><span class="num-mark">3</span><span class="row-text">修正に3日ほどかかる見込み</span></li><li class="enter row" style="--i:4"><span class="num-mark">4</span><span class="row-text">延ばすか、そのまま出すかで意見が分かれる</span></li></ol></div></section>
+<section class="scene" data-kind="points"><div class="content"><div class="section"><div class="rule rule-in"></div><h2 class="enter section-title" style="--i:0">論点</h2></div>
+    <p class="enter point" style="--i:1"><span class="hl">不具合を残したまま出すか</span></p>
+    <ul class="rows opinions"><li class="enter row" style="--i:2"><span class="dash">―</span><span class="row-text">利用者が少ない機能なので、出してから直す</span></li><li class="enter row" style="--i:3"><span class="dash">―</span><span class="row-text">検索は毎日使う人がいるので、直してから出す</span></li><li class="enter row" style="--i:4"><span class="dash">―</span><span class="row-text">告知した日付を変えるなら、早めに知らせる</span></li></ul></div></section>
+<section class="scene" data-kind="quote"><div class="content"><div class="section"><div class="rule rule-in"></div><h2 class="enter section-title" style="--i:0">印象に残った発言</h2></div>
+    <figure class="enter quote" style="--i:1">
+      <blockquote class="quote-text">毎朝検索を使う人がいるので、そこが壊れたまま出すのは避けたいです</blockquote>
+      <figcaption class="quote-by">さくら</figcaption>
+    </figure></div></section>
+<section class="scene" data-kind="outcome"><div class="content"><div class="section"><div class="rule rule-in"></div><h2 class="enter section-title" style="--i:0">結論</h2></div>
+    <div class="outcome decided"><div class="enter outcome-label" style="--i:1">決まったこと</div><ul class="rows"><li class="enter row" style="--i:2"><span class="check-mark">○</span><span class="row-text">リリースを1週間延ばす</span></li><li class="enter row" style="--i:3"><span class="check-mark">○</span><span class="row-text">延期は今日中に利用者へ知らせる</span></li></ul></div>
+    <div class="outcome open"><div class="enter outcome-label" style="--i:4">残ったこと</div><ul class="rows"><li class="enter row" style="--i:5"><span class="check-mark">△</span><span class="row-text">キャッシュの仕組みを見直すかどうか</span></li></ul></div></div></section>
+<section class="scene" data-kind="closing"><div class="content">
+    <div class="enter end-mark" style="--i:1">以上</div>
+    <div class="enter credits" style="--i:2"><div>要約: AI による要約。内容に誤りがある場合があります。数値は要約に使った発言から自動集計</div><div>音声: VOICEVOX:ずんだもん</div><div>#開発 ・ 2026/11/12 10:02 – 11:41</div></div></div></section>
+  </main>
+  <div class="caption-zone"><div id="caption"></div></div>
+  <footer class="folio">
+    <span class="where">#開発</span>
+    <span class="right"><span>AI による要約</span><span>VOICEVOX:ずんだもん</span><span class="page" id="page"></span></span>
+  </footer>
+</div>
+<script id="timeline-data" type="application/json">{"scenes":[{"kind":"opening","start":0,"end":11.383,"cues":[{"text":"来週のリリースを予定どおり出すかについての会話なのだ。","start":0.5,"end":5.4},{"text":"検索の不具合が見つかって、延ばすかどうかを話し合ったのだ。","start":5.55,"end":10.783}]},{"kind":"topic","start":11.383,"end":17.383,"cues":[{"text":"話題は、来週のリリースを予定どおり出すかどうかなのだ。","start":11.883,"end":16.783}]},{"kind":"flow","start":17.383,"end":28.766,"cues":[{"text":"テストで不具合が見つかり、原因はキャッシュの更新漏れと分かったのだ。","start":17.883,"end":23.95},{"text":"直すのに数日かかるので、意見が分かれたのだ。","start":24.1,"end":28.166}]},{"kind":"points","start":28.766,"end":38.649,"cues":[{"text":"論点は、不具合を残したまま出すかどうかなのだ。","start":29.266,"end":33.499},{"text":"出してから直す案と、直してから出す案が出たのだ。","start":33.649,"end":38.049}]},{"kind":"quote","start":38.649,"end":43.982,"cues":[{"text":"毎朝使う人がいるという声が、流れを決めたのだ。","start":39.149,"end":43.382}]},{"kind":"outcome","start":43.982,"end":55.699,"cues":[{"text":"リリースは1週間延ばし、今日中に知らせることに決まったのだ。","start":44.482,"end":49.882},{"text":"キャッシュの仕組みを見直すかは、まだ決まっていないのだ。","start":50.032,"end":55.099}]},{"kind":"closing","start":55.699,"end":60.599,"cues":[{"text":"会話の要約は以上なのだ。","start":56.199,"end":58.599}]}]}</script>
+<script>
+(() => {
+  const data = JSON.parse(document.getElementById("timeline-data").textContent);
+  const scenes = [...document.querySelectorAll(".scene")];
+  const page = document.getElementById("page");
+  const caption = document.getElementById("caption");
+  const main = document.querySelector("main");
+  let current = -1;
+
+  const activate = (index) => {
+    scenes.forEach((el, i) => el.classList.toggle("active", i === index));
+    page.textContent = (index + 1) + " / " + scenes.length;
+    current = index;
+  };
+
+  window.__prepare = async () => {
+    const text = document.body.textContent + data.scenes.flatMap((s) => s.cues.map((c) => c.text)).join("");
+    await Promise.all([
+      ...[500, 700, 800, 900].map((w) => document.fonts.load(w + ' 48px "Noto Serif JP Variable"', text)),
+      ...[400, 500, 700, 900].map((w) => document.fonts.load(w + ' 48px "Zen Kaku Gothic New"', text)),
+      document.fonts.load('400 28px "JetBrains Mono Variable"', text),
+    ]);
+    await document.fonts.ready;
+    const fitted = [];
+    scenes.forEach((scene, i) => {
+      activate(i);
+      const content = scene.querySelector(".content");
+      let scale = 1;
+      while (content.offsetHeight > main.clientHeight && scale > 0.6) {
+        scale = Math.round((scale - 0.04) * 100) / 100;
+        content.style.setProperty("--s", String(scale));
+      }
+      fitted.push(scale);
+    });
+    activate(0);
+    return fitted;
+  };
+
+  const clamp01 = (x) => Math.max(0, Math.min(1, x));
+  const CAPTION_LEAD = 0.1;
+
+  window.__seek = (t) => {
+    let index = data.scenes.findIndex((s) => t < s.end);
+    if (index < 0) index = data.scenes.length - 1;
+    if (index !== current) activate(index);
+    const scene = data.scenes[index];
+    const local = t - scene.start;
+    const fade = Math.round(clamp01(Math.min(local / 0.2, (scene.end - t) / 0.18)) * 100) / 100;
+    const el = scenes[index];
+    el.style.opacity = String(fade);
+
+    const progress = [];
+    for (const animation of el.getAnimations({ subtree: true })) {
+      animation.pause();
+      animation.currentTime = local * 1000;
+      const p = animation.effect.getComputedTiming().progress;
+      progress.push(p === null ? -1 : Math.round(p * 1000));
+    }
+
+    let cueIndex = -1;
+    scene.cues.forEach((cue, i) => { if (cue.start - CAPTION_LEAD <= t) cueIndex = i; });
+    let captionOpacity = 0;
+    if (cueIndex >= 0) {
+      const cue = scene.cues[cueIndex];
+      const key = index + "-" + cueIndex;
+      if (caption.dataset.key !== key) {
+        caption.textContent = cue.text;
+        caption.dataset.key = key;
+      }
+      captionOpacity = Math.round(clamp01((t - cue.start + CAPTION_LEAD) / 0.12) * fade * 100) / 100;
+    }
+    caption.style.opacity = String(captionOpacity);
+    return [index, fade, progress.join(","), cueIndex, captionOpacity].join("|");
+  };
+})();
+</script>
+</body>
+</html>

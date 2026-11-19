@@ -14,6 +14,8 @@ Claude Code に「動画で報告して」と頼むと、エージェントが�
 
 作業報告のほかに、Discord の会話を要約した縦型動画も作れます。台本は Discord の bot(Bobert)の AI が書き、Bobert が Managed Agents のサンドボックスで `dopagakix` を動かします([会話の要約の動画](#会話の要約の動画))。
 
+制作物の紹介のような、どちらにも当てはまらない動画は、構成と見た目を入力で決める自由形式で作れます([自由形式の動画](#自由形式の動画))。
+
 ## 仕組み
 
 ```
@@ -343,7 +345,7 @@ if (parsed.success) {
 
 ### 互換性の決まり
 
-サンドボックスはいつも dopagakix の main を入れます。一方、Bobert が読み込む `dopagakix/conversation` は、Bobert をデプロイした時点の版です。このずれで動画が作れなくならないよう、次のものを壊す形で変えません。
+サンドボックスはいつも dopagakix の main を入れます。一方、Bobert が読み込む `dopagakix/conversation` は、Bobert をデプロイした時点の版です。このずれで動画が作れなくならないよう、次のものを壊す形で変えません。自由形式(`dopagakix/free`)のファイルと形式の定義も、同じ決まりで扱います(4〜6)。
 
 1. **会話の要約のファイルの形式**(`ConversationFileSchema`、`src/conversation/schema.ts`)。
    - 欄を足すときは、任意の欄にします。
@@ -351,8 +353,137 @@ if (parsed.success) {
    - 確認の処理(`checkConversationScript`)は、警告を足してもかまいません。台本を書かせる側は、警告を AI に返して直させるだけなので、壊れません。
 2. **`check` と `render` のコマンド**: コマンドの名前、オプション、終了コードの意味。サンドボックスでの手順と、エージェントへの指示がこれに頼ります。
 3. **出力の形**: `check --json` の出力の欄と意味(特に、読みの確認の結果の `readings`)、`render` が標準出力に動画のパスを 1 行だけ出すこと、10MB を超えた動画を出力先に置かないこと、`scripts/sandbox/setup-voicevox.sh` の引数と出力。欄を足すのはかまいません。
+4. **自由形式の動画ごとのファイルの形式**(`FreeFileSchema`、`src/free/schema.ts`)。決まりは 1 と同じで、変えるときは `FREE_VERSION` を上げます。
+5. **形式の定義の形式**(`FormatSchema`、`src/free/format.ts`)。欄を足すのはかまいません。欄をなくす、受け付ける値を狭める、意味を変えるときは `FORMAT_VERSION` を上げ、古い版も受け付けます。既定の値を変えることも、既にある形式の見た目を変えるので、同じように扱います。
+6. **形式の CSS に公開する要素とクラスの名前**([docs/format.md](docs/format.md#公開する要素とクラス))と、CSS 変数の名前。足すのはかまいません。なくす、意味を変えるときは、形式の定義の `version` を上げ、古い版の定義で描画するときは、元の名前の要素とクラスを出し続けます。
 
-CI では、同梱の例(`examples/conversation.example.json`)を `check` で確かめ、読み上げ付きの動画も作ります。
+CI では、同梱の例(`examples/conversation.example.json`、`examples/free.example.json`、`examples/formats/`)を `check` で確かめ、読み上げ付きの動画も作ります。
+
+## 自由形式の動画
+
+構成(題字、表紙の数値、シーンの並び、欄見出し)、見た目(色、書体、動き、紙面の組み方)、文字数と件数の上限を、入力で決める動画です。制作物の紹介のように、作業報告と会話の要約のどちらにも当てはまらない動画に使います。
+
+渡すものを 2 つに分けます。
+
+| もの | 中身 | 作る頻度 |
+| --- | --- | --- |
+| 形式の定義(`kind: "format"`) | 題字と柱、色、書体、動き、紙面の組み方、上限 | 形式ごとに 1 回 |
+| 動画ごとのファイル(`kind: "free"`) | 画面に出す数値と、台本 | 動画ごと |
+
+形式の定義の書き方、色と書体のトークン、動き、CSS から指定できる要素とクラスは [docs/format.md](docs/format.md) にまとめています。定義を書かなければ、既定の形式(作業報告と会話の要約の見た目と上限)で作ります。
+
+### 作り方
+
+```bash
+dopagakix format init formats/intro --name 制作物の紹介   # 形式を作り始める(format.json と style.css)
+# formats/intro/format.json と style.css を書き換え、動画ごとのファイル video.json を書く
+dopagakix check video.json --format formats/intro/format.json   # 形式・文字数・色・ファイル・全文の読みを確かめる
+dopagakix render video.json --format formats/intro/format.json  # 動画を作る
+```
+
+- 形式の定義は、動画ごとのファイルの `format` に書くか(定義のファイルのパスか、定義そのもの)、`--format` で指定します。`--format` はファイルに書いた `format` より優先するので、同じ台本を別の形式で試せます。
+- `check` に形式の定義のファイルだけを渡すと、定義だけを確かめます。
+- 読み上げ、字幕の時刻、音の仕上げ、1 コマずつの撮影は、作業報告と同じく dopagakix が行います。同じ入力からは、いつ、どのマシンで描画しても同じ映像になり、描画のときに外部と通信しません。
+- スキルを使わずに試すときは、同梱の例を使います。
+
+```bash
+dopagakix render "$(npm root -g)/dopagakix/examples/free.example.json" --no-voice -o dopagakix-sample/free.mp4
+# 同じ台本を、形式の例(色と CSS を変えたもの)で作る
+dopagakix render "$(npm root -g)/dopagakix/examples/free.example.json" --no-voice -o dopagakix-sample/intro.mp4 \
+  --format "$(npm root -g)/dopagakix/examples/formats/intro/format.json"
+```
+
+### 動画ごとのファイル
+
+例は [examples/free.example.json](examples/free.example.json) です。
+
+```json
+{
+  "kind": "free",
+  "version": 1,
+  "format": "formats/intro/format.json",
+  "facts": {
+    "where": "4rtofl/Bobert",
+    "date": "2026-11-18",
+    "figures": {
+      "days": { "label": "開発期間", "value": 25, "unit": "日" },
+      "commits": { "label": "コミット", "value": 68, "unit": "件" },
+      "lines": { "label": "コード", "value": 38700, "unit": "行" }
+    },
+    "source": "GitHub のリポジトリから 2026-11-18 に集計"
+  },
+  "script": {
+    "title": "Bobert",
+    "headline": "使った人が自分の API キーで費用を払う、Discord の AI Bot",
+    "opening": { "figures": ["days", "commits", "lines"], "narration": ["Bobert は、Discord で話しかけると AI が答える Bot なのだ。"] },
+    "scenes": [
+      { "type": "text", "heading": "費用は、使った人が払う", "lines": ["自分の API キーを登録して使う"], "narration": ["AI の費用は、使った人が自分のキーで払うのだ。"] },
+      { "type": "image", "label": "画面", "src": "images/bobert-reply.png", "caption": "メンションに返事をしているところ", "narration": ["メンションすると、このように返事が届くのだ。"] }
+    ],
+    "closing": { "notes": ["github.com/4rtofl/Bobert"], "narration": ["紹介は以上なのだ。"] }
+  }
+}
+```
+
+- パス(`format`、画像の `src`)は、このファイルのあるフォルダーからの相対パスで書きます。
+- `facts` は動画ごとに変わる、画面に出すものです。すべて任意です。
+
+| 欄 | 画面 |
+| --- | --- |
+| `where` | 柱の左 |
+| `date` | 題字の横の日付(ISO 8601 の日付)。描画した日からは決めません(同じファイルからは、いつ描画しても同じ映像にするため) |
+| `figures` | 名前を付けた数値。見出し(`label`)、値(`value`)、単位(`unit`、任意)。値は数(3 桁ごとに区切って出す)か、`v1.13.2` のような短い文字列 |
+| `source` | 数値の出どころ。最終ページに「数値: 〜」と出します。数値を 1 つでも出すのに出どころがなければ、`check` が警告します |
+
+- 数値は台本(`script`)に書かず、`facts.figures` に名前を付けて置き、台本は名前で参照します。台本を書く AI と、数値を数えるプログラムを分けられるようにするためです。数値を数えるのは、ファイルを作る側の役目です。台本が `facts.figures` にない名前を参照していたら、`check` と `render` はエラーにします。
+- 題字(`page.mast`)と柱の右の表示(`page.labels`)は、形式の定義に書きます。AI が書いた台本であることを画面に出すときは、`page.labels` に書きます(例: `"AI が書いた紹介"`)。書かなければ出しません。音声のクレジットと「音声なし」は、柱に自動で足します。
+
+### 台本
+
+冒頭(`opening`)と締め(`closing`)は毎回入れ、その間に次の種類のシーンを好きな順に並べます(`scenes`)。同じ種類を繰り返してもかまいません。読み上げ文(`narration`)と読みの指定(`readings`)の書き方は、作業報告と会話の要約と同じです。
+
+- 冒頭: タイトル(`title`)と要旨(`headline`)を出します。`opening.figures` に数値の名前を書くと、その数値を並べ、`opening.note` を書くと、その下に 1 行出します。要旨の欄見出しは「要旨」で、`opening.label` で変えられます。
+- 締め: 右寄せの「以上」と、`closing.notes` に書いた行、数値の出どころ、音声と BGM と効果音のクレジットの順に出します。
+
+| 種類 | 欄 | 画面(既定の形式) |
+| --- | --- | --- |
+| 見出しと説明(`text`) | `heading`、`lines` | 罫線の下に大きな見出しと説明。欄見出しは出さない |
+| 行の並び(`list`) | `label`、`items`、`mark`(`number`=番号、`dash`=「―」、`arrow`=「→」。省略すると `dash`) | 欄見出しと、印の付いた行 |
+| 強調する 1 文(`point`) | `label`、`point`、`items`(任意) | 欄見出しと、蛍光ペンの下線を引いた 1 文、補足の行 |
+| 2 つに分けた行(`groups`) | `label`、`groups`(各組に小見出し `label`、印 `mark`、行 `items`。既定は 2 組、各 2 件) | 欄見出しと、小見出しごとの行。印は ○(`circle`)、△(`triangle`)、×(`cross`)、−(`bar`)で、色は順に成功、一部完了、失敗、未実施の色 |
+| 引用(`quote`) | `label`、`text`、`by`(任意) | 欄見出しと、鉤括弧で囲んだ文、名前 |
+| 図解(`figure`) | `figure`(作業報告の `figure` と同じ `before_after` か `flow`。読み上げ文は `narration` に書く) | 前後の比較か、流れ図。流れ図の `changed` は「強調する段」の意味 |
+| 数値(`numbers`) | `label`、`figures`(数値の名前) | 欄見出しと、`facts` の数値 |
+| 画像(`image`) | `label`、`src`、`caption`(任意) | 欄見出しと、画像 1 枚、説明 |
+
+- 件数の上限を超えた項目と、シーンの数の上限を超えたシーンは表示しません。中身のないシーンも出しません。どれも `check` が警告します。上限は形式の定義で変えられます(既定はシーン 1〜8 など。[docs/format.md の「上限」](docs/format.md#上限))。
+- 画像は PNG、JPEG、WebP の静止画です。URL、動く画像、SVG は使えません。既定の形式では、切り抜かずに本文の枠に収まるように縮め、墨の細い罫線で囲みます。`check` は、ファイルがあること、形式、大きさを確かめ、本文の枠より小さい画像(拡大されてぼやける)を警告します。
+- 図解に数値を書いても、作業報告と違って警告しません。画面の文字に数値を書くことも警告しません。
+
+### 確認と描画
+
+- `check` は、会話の要約と同じもの(形式、件数と文字数、シーンの数、読み上げにくい表記、口調の文末、読み上げ文の長さ、全文の読み)と、形式の定義(色の書式とコントラスト、書体・CSS・画像のファイルがあること、数値の名前の参照と出どころ)を確かめます。動画の作成依頼への言及は確かめません(動画の話をする台本があるため)。
+- `check --json` の `kind` は `"free"`(形式の定義だけを渡したときは `"format"`)です。警告の `at` は、動画ごとのファイルの中の位置(`script.scenes[1].label`、`facts.source`、`format.colors.ink3` など)です。
+- BGM と効果音を使えます。オプションと環境変数は作業報告と同じです。効果音は、ページの切り替え(`page.*`)と「以上」(`end.*`)で鳴らします。
+- 動画の大きさ(バイト数)の上限はありません。
+- `render` は、描画に使った読みの指定、話者、形式の定義のパス、相対パスの基準のフォルダー(`baseDir`)を足したファイルを、作業フォルダーの `script.json` に残します。`dopagakix render <この script.json>` で描画し直せます。
+- 書体・CSS・画像のファイルが無い・読めない場合は、`render` は音声合成と描画の前にエラーで止まります。内容があふれて縮めたシーンと、最小まで縮めても収まらないシーン、止めた外部へのリクエストは、`render` が知らせます(動画は作ります)。
+
+### ほかのプログラムから確かめる
+
+```ts
+import { checkFreeFile, freeScriptJsonSchema, parseFormat, parseFreeFile, resolveFormat, ZUNDAMON } from "dopagakix/free";
+
+const format = parseFormat(formatJson); // 形式の定義
+const parsed = parseFreeFile(json); // 形式の誤りと、facts にない数値の参照は parsed.error に文で入る
+if (format.success && parsed.success) {
+  const { issues } = checkFreeFile(parsed.data, { format: resolveFormat(format.data), persona: ZUNDAMON, seconds: 60 });
+}
+const schema = freeScriptJsonSchema(format.success ? format.data : undefined); // 台本の JSON Schema(その形式の上限を説明に書く)
+```
+
+- `dopagakix/free` は、package.json の `exports` で出している入口です。`dopagakix/conversation` と同じく、zod と、Node.js の機能に頼らないファイルだけを読み込みます(`test/free-entry.test.ts`)。
+- 書体・CSS・画像のファイルの確認と、読みの確認は含みません。`dopagakix check` で行います。
 
 ## VOICEVOX とキャラクターの規約
 
@@ -381,8 +512,9 @@ CI では、同梱の例(`examples/conversation.example.json`)を `check` で確
 | コマンド | 内容 |
 |----------|------|
 | `dopagakix prepare` | 出力先を作り、台本を書くための情報(画面に出る数値、口調、文字数の目安、環境、次に実行するコマンド)を表示する |
-| `dopagakix check <report.json>` | 台本と全文の読みを確かめ、確かめた読みを保存する。描画はしない。会話の要約のファイルも受け付ける。`--json` で結果を JSON で出す |
-| `dopagakix render <report.json>` | 動画を作る。`check` で確かめた読みと一致しなければ止まる。完成した mp4 のパスだけを標準出力に出す(進捗は標準エラー)。会話の要約のファイルも受け付ける |
+| `dopagakix check <report.json>` | 台本と全文の読みを確かめ、確かめた読みを保存する。描画はしない。会話の要約と自由形式のファイル、形式の定義も受け付ける。`--json` で結果を JSON で出す |
+| `dopagakix render <report.json>` | 動画を作る。`check` で確かめた読みと一致しなければ止まる。完成した mp4 のパスだけを標準出力に出す(進捗は標準エラー)。会話の要約と自由形式のファイルも受け付ける |
+| `dopagakix format init <dir>` | 自由形式の形式を作り始める。既定の値をすべて書いた `format.json` と、同梱のスタイルを写した `style.css` を作る |
 | `dopagakix digest` | セッションログを時系列のダイジェストにする(エージェントが作業を振り返る用。既定で 3 万文字以内) |
 | `dopagakix sessions` | プロジェクトのセッションログを新しい順に表示する |
 | `dopagakix speakers` | VOICEVOX の話者とスタイル ID を表示する |
@@ -407,6 +539,7 @@ CI では、同梱の例(`examples/conversation.example.json`)を `check` で確
 | `-o, --out <file>` | 台本と同じ場所の `summary.mp4` | 動画の出力先(`render` のみ)。作業ファイルも同じ場所に置き、`--video-dir` より優先します |
 | `--work-dir <dir>` | 動画と同じ場所(`-o`)、または台本と同じ場所 | 作業ファイル(`narration.wav`・`audio.wav`・`timeline.json`・`script.json`)を置くフォルダ(`render` のみ)。`-o` と組み合わせると、出力先に動画だけを置けます |
 | `--json` | (文で出す) | 結果を JSON で出します(`check` のみ。形は [docs/sandbox.md](docs/sandbox.md)) |
+| `--format <file>` | (ファイルの `format`) | 自由形式の形式の定義(`check` / `render`)。動画ごとのファイルに書いた `format` より優先します。自由形式のファイルにだけ使えます |
 
 `prepare` に付けたオプションは、`prepare` が表示する `check` / `render` のコマンドにも引き継がれます。
 
@@ -416,6 +549,8 @@ CI では、同梱の例(`examples/conversation.example.json`)を `check` で確
 dopagakix render "$(npm root -g)/dopagakix/examples/script.example.json" --no-voice -o dopagakix-sample/summary.mp4
 # 会話の要約
 dopagakix render "$(npm root -g)/dopagakix/examples/conversation.example.json" --no-voice -o dopagakix-sample/conversation.mp4 --work-dir dopagakix-sample/work
+# 自由形式
+dopagakix render "$(npm root -g)/dopagakix/examples/free.example.json" --no-voice -o dopagakix-sample/free.mp4
 ```
 
 ## 所要時間の目安
@@ -429,7 +564,7 @@ dopagakix render "$(npm root -g)/dopagakix/examples/conversation.example.json" -
 - **自己報告**: 台本はエージェントが自分の作業について書いたものです。重要な判断の前には、差分やテスト結果を確認してください。
 - **権限**: スキルは `allowed-tools: Bash(dopagakix *)` を指定しており、スキルを使うターンの間は `dopagakix` コマンドを許可の確認なしで実行します([Claude Code: Skills](https://code.claude.com/docs/en/skills))。
 - **VOICEVOX のクレジット**: 動画内に自動で表示します。詳しくは [VOICEVOX とキャラクターの規約](#voicevox-とキャラクターの規約) を参照してください。
-- **フォント**: Noto Serif JP(見出し)、Zen Kaku Gothic New(本文・字幕)、JetBrains Mono(パス)を npm パッケージ経由で使っています(いずれも SIL Open Font License 1.1)。
+- **フォント**: Noto Serif JP(見出し)、Zen Kaku Gothic New(本文・字幕)、JetBrains Mono(パス)を npm パッケージ経由で使っています(いずれも SIL Open Font License 1.1)。自由形式の形式の定義で書体のファイルを指定するときは、その書体のライセンスを形式を作る人が確かめてください。
 
 ## 開発
 
@@ -454,8 +589,8 @@ GitHub Actions(`.github/workflows/ci.yml`)で、push のたびに次の 3 つを
 | ジョブ | 内容 |
 |--------|------|
 | テスト | Node.js 22・24・26 で型検査と `npm test`。Chromium と ffmpeg を入れ、描画の結合テストを省略させない |
-| git からの導入 | 利用者と同じく git から `npm install -g` で導入し、スキルの導入と同梱サンプル(作業報告・会話の要約)の確認と描画を確かめる |
-| VOICEVOX との結合 | VOICEVOX ENGINE(Docker イメージ `cpu-0.25.2`)を起動し、実エンジンのテスト(読みの確認と `check` → `render` の流れを含む)と、読み上げ付きの動画(BGM・効果音なし、合成音の BGM 付き、合成音の効果音付き、会話の要約)の作成を行う。会話の要約は、サンドボックスと同じく `check --json` → `render --work-dir` で作り、出力先に動画だけがあることを確かめる。全体の音量、読み上げ中に BGM が下がること、効果音が決めた時刻に鳴り読み上げと重ならないことも確かめる。作った動画は成果物(`voiced-sample`・`voiced-bgm-sample`・`voiced-sfx-sample`・`conversation-sample`)として 7 日間保存する |
+| git からの導入 | 利用者と同じく git から `npm install -g` で導入し、スキルの導入と同梱サンプル(作業報告・会話の要約・自由形式と形式の例)の確認と描画を確かめる |
+| VOICEVOX との結合 | VOICEVOX ENGINE(Docker イメージ `cpu-0.25.2`)を起動し、実エンジンのテスト(読みの確認と `check` → `render` の流れを含む)と、読み上げ付きの動画(BGM・効果音なし、合成音の BGM 付き、合成音の効果音付き、会話の要約、自由形式)の作成を行う。会話の要約は、サンドボックスと同じく `check --json` → `render --work-dir` で作り、出力先に動画だけがあることを確かめる。自由形式は、同梱の例を形式の例(`examples/formats/intro`)と合成音の効果音で作る。全体の音量、読み上げ中に BGM が下がること、効果音が決めた時刻に鳴り読み上げと重ならないことも確かめる。作った動画は成果物(`voiced-sample`・`voiced-bgm-sample`・`voiced-sfx-sample`・`conversation-sample`・`free-sample`)として 7 日間保存する |
 
 結合テストは、必要な道具がない環境では省略されます。CI では環境変数 `DOPAGAKIX_TEST_REQUIRE_RENDER` / `DOPAGAKIX_TEST_REQUIRE_VOICEVOX` を `1` にして、準備に失敗したときに省略されたまま成功に見えないようにしています。
 
@@ -469,20 +604,22 @@ src/
 ├── persona.ts             キャラクターの口調(ファイルの読み込みと話者からの選択)
 ├── personas.ts            口調の定義と文末の確認(Node.js の機能に頼らない)
 ├── conversation/          会話の要約の台本の型・整形・確認。index.ts が dopagakix/conversation の入口
+├── free/                  自由形式の形式の定義と台本の型・整形・確認、ファイルの読み込み。index.ts が dopagakix/free の入口
 ├── redact.ts              秘匿情報のマスク
 ├── transcript/            セッションログの探索・解析・ダイジェスト化
 ├── script/                台本のスキーマ・整形・確認(check)・読みの指定と照合
 ├── tts/                   VOICEVOX・無音合成・WAV 処理
 ├── audio/                 音声の仕上げ(BGM・効果音の合成、音量の調整)
-└── video/                 タイムライン・HTML テンプレート(作業報告・会話の要約)・描画
+└── video/                 タイムライン・HTML テンプレート(作業報告・会話の要約・自由形式)・色と書体と動きのトークン・描画
 dist/                      ビルド済みの CLI(npm run compile で更新し、コミットする)
 .claude/skills/video-report/  エージェント用のスキル(npm パッケージにも同梱)
 .github/workflows/ci.yml   CI(GitHub Actions)
 .claude/skills/ui-ux-pro-max/ UI/UX Pro Max スキル(npm ui-ux-pro-max-cli 2.15.0、MIT。デザインの検討用)
 test/                      vitest のテストと合成フィクスチャ
-examples/                  スキルを使わずに render を試すためのサンプル(作業報告・会話の要約)
+examples/                  スキルを使わずに render を試すためのサンプル(作業報告・会話の要約・自由形式)と、形式の定義の例(formats/)
 scripts/sandbox/           サンドボックスで VOICEVOX ENGINE を入れて起動するスクリプト
-docs/design.md             動画のデザイン方針(避ける要素、トークン、構成の決まりごと)
+docs/design.md             動画のデザイン方針(避ける要素、トークン、構成の決まりごと)。自由形式の既定の形式の方針でもある
+docs/format.md             自由形式の形式の定義(欄、トークン、動き、公開する要素とクラス、上限)
 docs/sandbox.md            サンドボックスで会話の要約の動画を作る手順
 ```
 
