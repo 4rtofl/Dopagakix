@@ -2,6 +2,7 @@ import { existsSync, statSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import path from "node:path";
 import { resolveUserPath } from "../util/path.js";
+import { DEFAULT_MOTION, enterDelay } from "../video/motion.js";
 import { endMarkDelay, RESULT_ROW_DELAY } from "../video/template.js";
 import { parseDuration, parseVolume } from "./bgm.js";
 import { runFfmpeg } from "./ffmpeg.js";
@@ -130,6 +131,23 @@ export function sfxCues(scenes, script) {
     });
     return cues.filter((cue) => cue.until > cue.at);
 }
+/**
+ * 自由形式の効果音を鳴らす時刻。ページの切り替え(2 シーン目以降の開始)と、最終ページの「以上」で鳴らす。
+ * 「以上」は最終ページの最初の要素(登場順 1)なので、形式の定義の motion から時刻を決める。
+ */
+export function freeSfxCues(scenes, motion = DEFAULT_MOTION) {
+    const speechStart = (scene) => scene.cues[0]?.start ?? scene.end;
+    const cues = [];
+    scenes.forEach((scene, i) => {
+        if (i > 0)
+            cues.push({ kind: "page", at: scene.start, until: speechStart(scene) });
+        if (scene.kind === "closing")
+            cues.push({ kind: "end", at: round(scene.start + enterDelay(FREE_END_MARK, motion)), until: speechStart(scene) });
+    });
+    return cues.filter((cue) => cue.until > cue.at);
+}
+/** 自由形式の最終ページで「以上」の登場順(video/free.ts と合わせる) */
+export const FREE_END_MARK = 1;
 const num = (n) => String(Math.round(n * 1000) / 1000);
 /** 最大音量を -12 dBFS にそろえるゲインに --sfx-volume を足したもの(dB) */
 export function sfxGain(sound, volume) {

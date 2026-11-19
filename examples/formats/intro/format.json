@@ -1,0 +1,20 @@
+{
+  "kind": "format",
+  "version": 1,
+  "name": "制作物の紹介",
+  "page": { "mast": "制作物の紹介", "labels": ["AI が書いた紹介"] },
+  "colors": {
+    "paper": "#f2ede3",
+    "ink": "#1f1c17",
+    "ink2": "#4d473d",
+    "ink3": "#665f52",
+    "skip": "#665f52",
+    "partial": "#865500",
+    "attention": "#b23a0b",
+    "marker": "#f5cf5a"
+  },
+  "motion": { "enter": { "seconds": 0.3, "distance": 24 } },
+  "base": "paper",
+  "style": "style.css",
+  "limits": { "title": 16, "label": 10 }
+}

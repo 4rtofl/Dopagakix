@@ -336,3 +336,121 @@ describe("CLI: 会話の要約", () => {
     expect(await readdir(path.dirname(out))).toEqual(["summary.mp4"]);
   });
 });
+
+describe("CLI: 自由形式", () => {
+  const freeExample = path.join(root, "examples", "free.example.json");
+  const introFormat = path.join(root, "examples", "formats", "intro", "format.json");
+  let dir: string;
+  beforeAll(async () => {
+    dir = await mkdtemp(path.join(os.tmpdir(), "dopagakix-cli-free-"));
+  });
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("check は kind: free のファイルを自由形式として確かめ、--format で別の形式を試せる", async () => {
+    const result = await run(["check", freeExample, "--no-voice", "--persona", "zundamon"]);
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.stdout).toMatch(/^形式: 正しい\(「Dopagakix」、自由形式、既定の形式\)/);
+    expect(result.stdout).toContain("警告: なし");
+
+    const json = await run(["check", freeExample, "--no-voice", "--persona", "zundamon", "--format", introFormat, "--json"]);
+    expect(json.code, json.stderr).toBe(0);
+    expect(JSON.parse(json.stdout)).toMatchObject({ kind: "free", title: "Dopagakix", issues: [], readings: { status: "skipped" } });
+  });
+
+  it("check に形式の定義だけを渡すと、定義だけを確かめる", async () => {
+    const result = await run(["check", introFormat]);
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.stdout).toBe("形式: 正しい(「制作物の紹介」、形式の定義)\n警告: なし\n読み: 省略(形式の定義だけを確かめた)\n");
+    const json = JSON.parse((await run(["check", introFormat, "--json"])).stdout);
+    expect(json).toMatchObject({ kind: "format", title: "制作物の紹介", issues: [], readings: { status: "skipped" } });
+  });
+
+  it("警告の at は、動画ごとのファイルの中の位置を指す。facts にない数値の参照はエラーにする", async () => {
+    const file = JSON.parse(await readFile(freeExample, "utf8"));
+    file.format = { kind: "format", version: 1, limits: { title: 4 } };
+    file.script.closing.notes.push("二", "三", "四");
+    const target = path.join(dir, "over.json");
+    await writeFile(target, JSON.stringify(file));
+    await copyFile(path.join(root, "examples", "images", "free-check.png"), path.join(dir, "free-check.png"));
+    const result = JSON.parse((await run(["check", target, "--no-voice", "--json"])).stdout);
+    expect(result.issues.map((issue: { at: string }) => issue.at)).toEqual(["script.title", "script.closing.notes", "script.scenes[7].src"]);
+
+    file.script.opening.figures.push("stars");
+    await writeFile(target, JSON.stringify(file));
+    const bad = await run(["check", target, "--no-voice"]);
+    expect(bad.code).toBe(1);
+    expect(bad.stderr).toMatch(/facts\.figures にない数値の名前です: "stars"/);
+    const render = await run(["render", target, "--no-voice", "-o", path.join(dir, "bad.mp4")]);
+    expect(render.code).toBe(1);
+    expect(render.stderr).toMatch(/facts\.figures にない数値の名前です/);
+  });
+
+  it("--format は自由形式のファイルにだけ使え、形式の定義だけでは動画を作れない", async () => {
+    const check = await run(["check", conversationExample, "--no-voice", "--format", introFormat]);
+    expect(check.code).toBe(1);
+    expect(check.stderr).toContain("--format は、自由形式のファイル(kind: free)にだけ使えます。");
+    const render = await run(["render", introFormat, "--no-voice"]);
+    expect(render.code).toBe(1);
+    expect(render.stderr).toContain("形式の定義だけでは動画を作れません");
+  });
+
+  it("render は、画像や形式のファイルが無ければ、音声合成と描画の前に止まる", async () => {
+    const file = JSON.parse(await readFile(freeExample, "utf8"));
+    const target = path.join(dir, "noimage", "free.json");
+    await mkdir(path.dirname(target), { recursive: true });
+    await writeFile(target, JSON.stringify(file));
+    const out = path.join(dir, "noimage", "summary.mp4");
+    const result = await run(["render", target, "--no-voice", "-o", out]);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toMatch(/描画に使うファイルを読めません:\n- script\.scenes\[7\]\.src: 画像が見つかりません/);
+    expect(existsSync(out)).toBe(false);
+  });
+
+  it("render は VOICEVOX に接続できなければ止まる(字幕のみに切り替えない)", async () => {
+    const out = path.join(dir, "voice", "summary.mp4");
+    const result = await run(["render", freeExample, "-o", out]);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toMatch(/VOICEVOX エンジン.*に接続できません/);
+    expect(existsSync(out)).toBe(false);
+  });
+
+  it("format init は、既定の値の format.json と同梱のスタイルの style.css を作り、既にあれば上書きしない", async () => {
+    const target = path.join(dir, "formats", "mine");
+    const result = await run(["format", "init", target, "--name", "わたしの形式"]);
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe(path.join(target, "format.json"));
+    const definition = JSON.parse(await readFile(path.join(target, "format.json"), "utf8"));
+    expect(definition).toMatchObject({ kind: "format", version: 1, name: "わたしの形式", base: "paper", style: "style.css", limits: { title: 20 } });
+    expect(await readFile(path.join(target, "style.css"), "utf8")).toContain(".mast-title {");
+    expect((await run(["check", path.join(target, "format.json")])).stdout).toContain("警告: なし");
+    // 作った形式で、例を確かめられる
+    const check = await run(["check", freeExample, "--no-voice", "--persona", "zundamon", "--format", path.join(target, "format.json")]);
+    expect(check.stdout).toContain("警告: なし");
+
+    const again = await run(["format", "init", target]);
+    expect(again.code).toBe(1);
+    expect(again.stderr).toContain("上書きするときは --force を付けてください");
+    expect((await run(["format", "init", target, "--force"])).code).toBe(0);
+  });
+
+  // 実エンジンと描画の道具がそろった環境でだけ実行する(CI の「VOICEVOX との結合」)
+  it.runIf(canRender && voicevoxAvailable)("check で確かめた読みで、読み上げ付きの自由形式の動画を作る", { timeout: 600_000 }, async () => {
+    const work = path.join(dir, "voiced");
+    await mkdir(work, { recursive: true });
+    const input = path.join(work, "free.json");
+    const json = JSON.parse(await readFile(freeExample, "utf8"));
+    json.script.scenes = json.script.scenes.filter((scene: { type: string }) => scene.type !== "image");
+    await writeFile(input, JSON.stringify(json));
+    const env = { VOICEVOX_URL: voicevoxUrl };
+    const check = await run(["check", input, "--json", "--speaker", "3"], env);
+    expect(check.code, check.stderr).toBe(0);
+    expect(JSON.parse(check.stdout)).toMatchObject({ kind: "free", issues: [], readings: { status: "checked" } });
+    const out = path.join(work, "summary.mp4");
+    const render = await run(["render", input, "--speaker", "3", "--fps", "2", "-o", out], env);
+    expect(render.code, render.stderr).toBe(0);
+    expect(render.stdout.trim()).toBe(out);
+    expect(JSON.parse(await readFile(path.join(work, "script.json"), "utf8"))).toMatchObject({ kind: "free", voice: { enabled: true, speaker: 3 } });
+  });
+});

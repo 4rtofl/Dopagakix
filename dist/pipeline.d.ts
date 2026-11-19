@@ -1,6 +1,7 @@
 import { type BgmSetting, type BgmTrack } from "./audio/bgm.js";
 import { type ConversationFacts, type ConversationScript } from "./conversation/schema.js";
 import { type SfxSet, type SfxSetting } from "./audio/sfx.js";
+import { type LoadedFree, type ProbedImage } from "./free/files.js";
 import type { SessionFacts } from "./facts.js";
 import { type CheckedReadings, type Readings, type SpeechUnit } from "./script/readings.js";
 import { type Author, type VideoScript } from "./script/schema.js";
@@ -192,6 +193,8 @@ export interface LoadedConversation {
 }
 /** 台本のファイルが、会話の要約(kind: "conversation")か */
 export declare function isConversationInput(file: string): Promise<boolean>;
+/** check と render に渡したファイルの種類。report=作業報告(台本か script.json) */
+export declare function inputKind(file: string): Promise<"report" | "conversation" | "free" | "format">;
 /** 会話の要約のファイル(台本と数値。render が残した script.json も同じ形式)を読む */
 export declare function loadConversation(file: string): Promise<LoadedConversation>;
 /** 会話の要約の動画の大きさの上限。Discord に添付できる大きさ(10MB) */
@@ -215,3 +218,20 @@ export interface ConversationRenderInput {
 }
 /** 会話の要約の台本から音声と映像を作り、mp4 に書き出す。BGM と効果音は使わない */
 export declare function renderConversation(input: ConversationRenderInput, options: RenderPipelineOptions): Promise<RenderResult>;
+export interface FreeRenderInput {
+    /** 読み込んだ動画ごとのファイル(loadFree)。書かれたままの台本を表示用に整えて描画する */
+    loaded: LoadedFree;
+    /** 画像のシーンの画像(probeImages で確かめたもの) */
+    images: Record<string, ProbedImage>;
+    persona?: {
+        id: string;
+        name: string;
+    };
+    readings?: Readings;
+    /** BGM(probeBgm で確かめたもの)。なければ BGM なし */
+    bgm?: BgmTrack;
+    /** 効果音(probeSfx で確かめたもの)。なければ効果音なし */
+    sfx?: SfxSet;
+}
+/** 自由形式の台本から音声と映像を作り、mp4 に書き出す。動画の大きさ(バイト数)の上限は設けない */
+export declare function renderFree(input: FreeRenderInput, options: RenderPipelineOptions): Promise<RenderResult>;

@@ -1,4 +1,5 @@
 import type { VideoScript } from "../script/schema.js";
+import { type Motion } from "../video/motion.js";
 import type { TimedScene } from "../video/timeline.js";
 import type { AudioLayer } from "./finish.js";
 /**
@@ -76,6 +77,13 @@ export interface SfxCue {
  * - end: 最終ページで「以上」が現れる時刻
  */
 export declare function sfxCues(scenes: TimedScene[], script: VideoScript): SfxCue[];
+/**
+ * 自由形式の効果音を鳴らす時刻。ページの切り替え(2 シーン目以降の開始)と、最終ページの「以上」で鳴らす。
+ * 「以上」は最終ページの最初の要素(登場順 1)なので、形式の定義の motion から時刻を決める。
+ */
+export declare function freeSfxCues(scenes: TimedScene[], motion?: Motion): SfxCue[];
+/** 自由形式の最終ページで「以上」の登場順(video/free.ts と合わせる) */
+export declare const FREE_END_MARK = 1;
 /** 最大音量を -12 dBFS にそろえるゲインに --sfx-volume を足したもの(dB) */
 export declare function sfxGain(sound: Pick<SfxSound, "peak">, volume: number): number;
 /**

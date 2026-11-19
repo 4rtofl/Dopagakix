@@ -17,6 +17,10 @@
       "types": "./dist/conversation/index.d.ts",
       "default": "./dist/conversation/index.js"
     },
+    "./free": {
+      "types": "./dist/free/index.d.ts",
+      "default": "./dist/free/index.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [

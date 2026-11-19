@@ -1,0 +1,93 @@
+{
+  "kind": "free",
+  "version": 1,
+  "facts": {
+    "where": "4rtofl/Dopagakix",
+    "date": "2026-11-18",
+    "figures": {
+      "days": { "label": "開発期間", "value": 43, "unit": "日" },
+      "commits": { "label": "コミット", "value": 48, "unit": "件" },
+      "lines": { "label": "コード", "value": 6399, "unit": "行" },
+      "kinds": { "label": "動画の種類", "value": 3, "unit": "種" },
+      "version": { "label": "版", "value": "v0.1.0" }
+    },
+    "source": "main(424b69f)から 2026-11-18 に集計"
+  },
+  "script": {
+    "title": "Dopagakix",
+    "headline": "AI が書いた台本から、読み上げ付きの縦型動画を作る CLI",
+    "opening": {
+      "figures": ["days", "commits", "lines"],
+      "note": "作業報告・会話の要約・自由形式",
+      "narration": ["Dopagakix は、AI が書いた台本を縦型の動画にする道具なのだ。"]
+    },
+    "scenes": [
+      {
+        "type": "text",
+        "heading": "台本は AI、数値はプログラム",
+        "lines": ["AI は画面の文章と読み上げ文だけを書く", "画面に出す数値は、プログラムが数える"],
+        "narration": ["台本は AI が書き、数値はプログラムが数えるのだ。"]
+      },
+      {
+        "type": "list",
+        "label": "動画ができるまで",
+        "mark": "number",
+        "items": ["台本の形と長さを check で確かめる", "全文の読みを VOICEVOX で確かめる", "ページを 1 コマずつ撮る", "読み上げと合わせて mp4 にする"],
+        "narration": ["台本と読みを確かめてから、1 コマずつ撮って動画にするのだ。"]
+      },
+      {
+        "type": "figure",
+        "figure": {
+          "type": "flow",
+          "title": "形式と台本を分ける",
+          "steps": [
+            { "label": "形式の定義", "note": "色、書体、上限" },
+            { "label": "動画ごとのファイル", "note": "数値と台本", "changed": true },
+            { "label": "縦型の動画" }
+          ]
+        },
+        "narration": ["見た目は形式の定義に、中身は動画ごとのファイルに書くのだ。"]
+      },
+      {
+        "type": "point",
+        "label": "大事にしていること",
+        "point": "同じ入力からは、いつも同じ映像にする",
+        "items": ["時刻を指定して止めた状態を撮る", "描画のときに外部と通信しない"],
+        "narration": ["同じ入力からは、どのマシンでも同じ映像になるのだ。"]
+      },
+      {
+        "type": "groups",
+        "label": "形式で変えられるもの",
+        "groups": [
+          { "label": "変えられる", "mark": "circle", "items": ["色、書体、動きの長さ", "紙面の組み方(CSS)", "文字数と件数の上限"] },
+          { "label": "変えられない", "mark": "bar", "items": ["読み上げと字幕の時刻", "HTML の構造"] }
+        ],
+        "narration": ["色や書体は変えられて、読み上げの時刻は変えられないのだ。"]
+      },
+      {
+        "type": "quote",
+        "label": "デザインの方針",
+        "text": "動画は「紙の作業報告書」を縦長にしたものとして組みます",
+        "by": "docs/design.md",
+        "narration": ["既定の見た目は、紙の報告書を縦長にしたものなのだ。"]
+      },
+      {
+        "type": "numbers",
+        "label": "数字で見る",
+        "figures": ["kinds", "commits", "version"],
+        "narration": ["作れる動画は、作業報告と会話の要約と自由形式の三種類なのだ。"]
+      },
+      {
+        "type": "image",
+        "label": "確かめた結果",
+        "src": "images/free-check.png",
+        "caption": "この例を check で確かめたところ",
+        "narration": ["書いた台本は、描画の前に確かめられるのだ。"]
+      }
+    ],
+    "closing": {
+      "notes": ["github.com/4rtofl/Dopagakix"],
+      "narration": ["紹介は以上なのだ。"]
+    }
+  }
+}

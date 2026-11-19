@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { conversationNarrations } from "../conversation/normalize.js";
+import { freeNarrations } from "../free/normalize.js";
 import { cleanText } from "./normalize.js";
 import { VideoScriptSchema } from "./schema.js";
 import { splitCaption } from "../video/timeline.js";
@@ -147,6 +148,14 @@ export function conversationSpeechUnits(script) {
 /** 会話の要約の台本の、シーンごとの読み上げ文(字幕 1 枚ごとに分けたもの)。描画の順 */
 export function conversationSceneLines(script) {
     return conversationNarrations(script).map(({ kind, lines }) => ({ kind, lines: lines.flatMap((line) => splitCaption(line)) }));
+}
+/** 自由形式の台本の読み上げ文を、描画のときに音声を作るのと同じ単位にする。at は動画ごとのファイルの中の位置(script.〜) */
+export function freeSpeechUnits(script, limits, facts) {
+    return freeNarrations(script, limits, facts).flatMap(({ at, lines }) => lines.flatMap((line, i) => splitCaption(line).map((text) => ({ at: `${at}[${i}]`, text }))));
+}
+/** 自由形式の台本の、シーンごとの読み上げ文(字幕 1 枚ごとに分けたもの)。描画の順 */
+export function freeSceneLines(script, limits, facts) {
+    return freeNarrations(script, limits, facts).map(({ kind, lines }) => ({ kind, lines: lines.flatMap((line) => splitCaption(line)) }));
 }
 /** 読みの確認結果(check が保存し、render が照らし合わせる) */
 export const CheckedReadingsSchema = z.object({
